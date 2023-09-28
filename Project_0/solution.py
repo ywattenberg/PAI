@@ -42,7 +42,20 @@ def log_posterior_probs(x):
     """
     assert x.ndim == 1
 
-    # TODO: enter your code here
+    props = np.zeros(3, dtype=np.float64)
+
+    # Calculate the log-likelihoods for each hypothesis
+    for i in range(3):
+        props[i] = np.sum(HYPOTHESIS_SPACE[i].logpdf(x))
+
+    # Calculate log-posterior probabilities
+    log_p = [prop + prior for prop, prior in zip(props, np.log(PRIOR_PROBS))]
+
+    # Calculate total log-likelihood
+    total_log_likelihood = logsumexp(log_p)
+
+    # Calculate log-posterior probabilities
+    log_p = log_p - total_log_likelihood
 
     assert log_p.shape == (3,)
     return log_p
