@@ -7,8 +7,9 @@ import matplotlib.pyplot as plt
 from matplotlib import cm
 
 
+
 # Set `EXTENDED_EVALUATION` to `True` in order to visualize your predictions.
-EXTENDED_EVALUATION = False
+EXTENDED_EVALUATION = True
 EVALUATION_GRID_POINTS = 300  # Number of grid points used in extended evaluation
 
 # Cost function constants
@@ -29,8 +30,9 @@ class Model(object):
         We already provide a random number generator for reproducibility.
         """
         self.rng = np.random.default_rng(seed=0)
-
         # TODO: Add custom initialization for your model here if necessary
+        self.model = GaussianProcessRegressor(random_state=3092)
+
 
     def make_predictions(self, test_x_2D: np.ndarray, test_x_AREA: np.ndarray) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -46,7 +48,10 @@ class Model(object):
         gp_mean = np.zeros(test_x_2D.shape[0], dtype=float)
         gp_std = np.zeros(test_x_2D.shape[0], dtype=float)
 
+        gp_mean, gp_std = self.model.predict(test_x_2D, return_std=True)
+
         # TODO: Use the GP posterior to form your predictions here
+        
         predictions = gp_mean
 
         return predictions, gp_mean, gp_std
@@ -56,10 +61,12 @@ class Model(object):
         Fit your model on the given training data.
         :param train_x_2D: Training features as a 2d NumPy float array of shape (NUM_SAMPLES, 2)
         :param train_y: Training pollution concentrations as a 1d NumPy float array of shape (NUM_SAMPLES,)
-        """
+        """        
 
         # TODO: Fit your model here
-        pass
+        self.model.fit(train_x_2D, train_y)
+        
+
 
 # You don't have to change this function
 def cost_function(ground_truth: np.ndarray, predictions: np.ndarray, AREA_idxs: np.ndarray) -> float:
@@ -172,12 +179,17 @@ def extract_city_area_information(train_x: np.ndarray, test_x: np.ndarray) -> ty
     :return: Tuple of (training features' 2D coordinates, training features' city_area information,
         test features' 2D coordinates, test features' city_area information)
     """
-    train_x_2D = np.zeros((train_x.shape[0], 2), dtype=float)
-    train_x_AREA = np.zeros((train_x.shape[0],), dtype=bool)
-    test_x_2D = np.zeros((test_x.shape[0], 2), dtype=float)
-    test_x_AREA = np.zeros((test_x.shape[0],), dtype=bool)
+    # train_x_2D = np.zeros((train_x.shape[0], 2), dtype=float)
+    # train_x_AREA = np.zeros((train_x.shape[0],), dtype=bool)
+    # test_x_2D = np.zeros((test_x.shape[0], 2), dtype=float)
+    # test_x_AREA = np.zeros((test_x.shape[0],), dtype=bool)
 
     #TODO: Extract the city_area information from the training and test features
+
+    train_x_2D = train_x[:, [0,1]]
+    train_x_AREA = train_x[:, 2]
+    test_x_2D = test_x[:, [0,1]]
+    test_x_AREA = test_x[:, 2]
 
     assert train_x_2D.shape[0] == train_x_AREA.shape[0] and test_x_2D.shape[0] == test_x_AREA.shape[0]
     assert train_x_2D.shape[1] == 2 and test_x_2D.shape[1] == 2
