@@ -5,6 +5,7 @@ import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 import matplotlib.pyplot as plt
 from matplotlib import cm
+from scipy.stats import norm
 
 
 
@@ -31,8 +32,16 @@ class Model(object):
         """
         self.rng = np.random.default_rng(seed=0)
         # TODO: Add custom initialization for your model here if necessary
-        self.model = GaussianProcessRegressor(random_state=3092)
+        
+        print(f"Using Copilot Kernel")
+        self.kernel = RBF(length_scale=1.0, length_scale_bounds=(1e-05, 10.0)) + WhiteKernel(noise_level=1.0, noise_level_bounds=(1e-05, 10.0))
+        
+        # print(f"Using RBF Kernel")
+        # self.kernel = RBF(length_scale=0.001, length_scale_bounds=(1e-05, 1))
+        # print(f"Using White Kernel")
+        # self.kernel = WhiteKernel()
 
+        self.model = GaussianProcessRegressor(kernel=self.kernel, random_state=3092, normalize_y=True)
 
     def make_predictions(self, test_x_2D: np.ndarray, test_x_AREA: np.ndarray) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -45,13 +54,14 @@ class Model(object):
         """
 
         # TODO: Use your GP to estimate the posterior mean and stddev for each city_area here
-        gp_mean = np.zeros(test_x_2D.shape[0], dtype=float)
-        gp_std = np.zeros(test_x_2D.shape[0], dtype=float)
-
-        gp_mean, gp_std = self.model.predict(test_x_2D, return_std=True)
+        test_x_2D_norm = (test_x_2D - self.train_mean) / self.train_std
+        
+        gp_mean, gp_std = self.model.predict(test_x_2D_norm, return_std=True)
+        print(f"gp_mean: {gp_mean[0]}, gp_std: {gp_std[0]}")
 
         # TODO: Use the GP posterior to form your predictions here
         
+        print(f"Returning predictions of shape {gp_mean.shape} and {gp_std.shape}")
         predictions = gp_mean
 
         return predictions, gp_mean, gp_std
@@ -63,10 +73,16 @@ class Model(object):
         :param train_y: Training pollution concentrations as a 1d NumPy float array of shape (NUM_SAMPLES,)
         """        
 
-        # TODO: Fit your model here
-        self.model.fit(train_x_2D, train_y)
+        self.train_mean = np.mean(train_x_2D)
+        self.train_std = np.std(train_x_2D)
         
-
+        train_x_2D_norm = (train_x_2D - self.train_mean) / self.train_std
+        
+        # TODO: Fit your model here
+        print(f"Fitting model")
+        # self.model.fit(train_x_2D[:1000], train_y[:1000])
+        self.model.fit(train_x_2D_norm, train_y)
+        print(f"All fitted")
 
 # You don't have to change this function
 def cost_function(ground_truth: np.ndarray, predictions: np.ndarray, AREA_idxs: np.ndarray) -> float:
