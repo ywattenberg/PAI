@@ -37,8 +37,7 @@ class Model(object):
         # print(f"Using Copilot Kernel")
         # self.kernel = RBF(length_scale=1.0, length_scale_bounds=(1e-05, 10.0)) + WhiteKernel(noise_level=1.0, noise_level_bounds=(1e-05, 10.0))
         
-        # ConstantKernel() * DotProduct() + 
-        self.kernel = RationalQuadratic() * ConstantKernel(constant_value_bounds=[1e-7, 100])
+        self.kernel = ConstantKernel() * DotProduct() + RationalQuadratic() * ConstantKernel() + WhiteKernel()
         
         # print(f"Using RBF Kernel")
         # self.kernel = RBF(length_scale=0.001, length_scale_bounds=(1e-05, 1))
@@ -79,7 +78,7 @@ class Model(object):
         # TODO: Use the GP posterior to form your predictions here
         
         # calculate the upper bound of the chosen confidence interval
-        upper_bounds = [norm.interval(alpha=0.68, loc=mean, scale=std)[1] for mean, std in zip(gp_mean, gp_std_one)]
+        upper_bounds = [norm.interval(alpha=0.15, loc=mean, scale=std)[1] for mean, std in zip(gp_mean, gp_std_one)]
         # in residential areas, use the upper bound as prediction
         # in non-residential areas, use the mean as prediction
         predictions = np.array([round(upper_bound, 6) if is_residential else mean for mean, upper_bound, is_residential in zip(gp_mean, upper_bounds, is_residentials)])
