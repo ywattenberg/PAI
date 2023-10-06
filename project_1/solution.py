@@ -1,6 +1,7 @@
 import os
 import typing
 from sklearn.gaussian_process.kernels import *
+from sklearn.model_selection import train_test_split
 import numpy as np
 from sklearn.gaussian_process import GaussianProcessRegressor
 import matplotlib.pyplot as plt
@@ -33,15 +34,19 @@ class Model(object):
         self.rng = np.random.default_rng(seed=0)
         # TODO: Add custom initialization for your model here if necessary
         
-        print(f"Using Copilot Kernel")
-        self.kernel = RBF(length_scale=1.0, length_scale_bounds=(1e-05, 10.0)) + WhiteKernel(noise_level=1.0, noise_level_bounds=(1e-05, 10.0))
+        # print(f"Using Copilot Kernel")
+        # self.kernel = RBF(length_scale=1.0, length_scale_bounds=(1e-05, 10.0)) + WhiteKernel(noise_level=1.0, noise_level_bounds=(1e-05, 10.0))
+        
+        # ConstantKernel() * DotProduct() + 
+        self.kernel = RationalQuadratic() * ConstantKernel(constant_value_bounds=[1e-7, 100])
         
         # print(f"Using RBF Kernel")
         # self.kernel = RBF(length_scale=0.001, length_scale_bounds=(1e-05, 1))
         # print(f"Using White Kernel")
         # self.kernel = WhiteKernel()
 
-        self.model = GaussianProcessRegressor(kernel=self.kernel, random_state=3092, normalize_y=True)
+        self.model_one = GaussianProcessRegressor(kernel=self.kernel, random_state=3092, normalize_y=True, n_restarts_optimizer=0)
+        self.model_two = GaussianProcessRegressor(kernel=self.kernel, random_state=3092, normalize_y=True, n_restarts_optimizer=0)
 
     def make_predictions(self, test_x_2D: np.ndarray, test_x_AREA: np.ndarray) -> typing.Tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
@@ -56,13 +61,38 @@ class Model(object):
         # TODO: Use your GP to estimate the posterior mean and stddev for each city_area here
         test_x_2D_norm = (test_x_2D - self.train_mean) / self.train_std
         
-        gp_mean, gp_std = self.model.predict(test_x_2D_norm, return_std=True)
+        gp_mean_one, gp_std_one = self.model_one.predict(test_x_2D_norm, return_std=True)
+        gp_mean_two, gp_std_two = self.model_two.predict(test_x_2D_norm, return_std=True)
+        
+        is_residentials = test_x_AREA == 1
+        
+        print(f"gp_mean_one: {gp_mean_one[0]}, gp_std_one: {gp_std_one[0]}")
+        print(f"gp_mean_two: {gp_mean_two[0]}, gp_std_two: {gp_std_two[0]}")
+        
+        gp_mean = (gp_mean_one + gp_mean_two) / 2
+        gp_std = (gp_std_one + gp_std_two) / 2
+        
         print(f"gp_mean: {gp_mean[0]}, gp_std: {gp_std[0]}")
+        
+        
 
         # TODO: Use the GP posterior to form your predictions here
         
-        print(f"Returning predictions of shape {gp_mean.shape} and {gp_std.shape}")
-        predictions = gp_mean
+        # calculate the upper bound of the chosen confidence interval
+        upper_bounds = [norm.interval(alpha=0.68, loc=mean, scale=std)[1] for mean, std in zip(gp_mean, gp_std_one)]
+        # in residential areas, use the upper bound as prediction
+        # in non-residential areas, use the mean as prediction
+        predictions = np.array([round(upper_bound, 6) if is_residential else mean for mean, upper_bound, is_residential in zip(gp_mean, upper_bounds, is_residentials)])
+        
+        # print(predictions[:3])
+        # print(predictions)
+        # print(f"predictions shape: {predictions.shape}")
+        # print(f"predictions: {predictions[0]}")
+        # print(f"gp_mean: {gp_mean[0]}")
+        # print(f"gp_std: {gp_std[0]}")
+        # print(f"upper_bounds: {upper_bounds[0]}")
+        
+        # print(f"Returning predictions of shape {predictions.shape}")
 
         return predictions, gp_mean, gp_std
 
@@ -78,11 +108,15 @@ class Model(object):
         
         train_x_2D_norm = (train_x_2D - self.train_mean) / self.train_std
         
+        # train_x_one, train_x_two, train_y_one, train_y_two = train_test_split(train_x_2D_norm[:5000], train_y[:5000], test_size=0.5, shuffle=True, random_state=3092)
+        train_x_one, train_x_two, train_y_one, train_y_two = train_test_split(train_x_2D_norm, train_y, test_size=0.5, shuffle=True, random_state=3092)
+        
         # TODO: Fit your model here
-        print(f"Fitting model")
-        # self.model.fit(train_x_2D[:1000], train_y[:1000])
-        self.model.fit(train_x_2D_norm, train_y)
-        print(f"All fitted")
+        
+        print(f"Fitting model one")
+        self.model_one.fit(train_x_one, train_y_one)
+        print(f"Fitting model two")
+        self.model_two.fit(train_x_two, train_y_two)
 
 # You don't have to change this function
 def cost_function(ground_truth: np.ndarray, predictions: np.ndarray, AREA_idxs: np.ndarray) -> float:
