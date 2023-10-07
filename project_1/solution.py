@@ -37,7 +37,7 @@ class Model(object):
         # print(f"Using Copilot Kernel")
         # self.kernel = RBF(length_scale=1.0, length_scale_bounds=(1e-05, 10.0)) + WhiteKernel(noise_level=1.0, noise_level_bounds=(1e-05, 10.0))
         
-        self.kernel = ConstantKernel() * DotProduct() + RationalQuadratic() * ConstantKernel() + WhiteKernel()
+        self.kernel = ConstantKernel() * DotProduct() + ConstantKernel() * Matern() + WhiteKernel()
         
         # print(f"Using RBF Kernel")
         # self.kernel = RBF(length_scale=0.001, length_scale_bounds=(1e-05, 1))
