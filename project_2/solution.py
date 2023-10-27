@@ -15,7 +15,7 @@ from matplotlib import pyplot as plt
 
 from util import draw_reliability_diagram, cost_function, setup_seeds, calc_calibration_curve
 
-EXTENDED_EVALUATION = False
+EXTENDED_EVALUATION = True
 """
 Set `EXTENDED_EVALUATION` to `True` in order to generate additional plots on validation data.
 """
@@ -31,13 +31,13 @@ Note that MAP inference can take a long time.
 
 
 def main():
-    raise RuntimeError(
-        "This main() method is for illustrative purposes only"
-        " and will NEVER be called when running your solution to generate your submission file!\n"
-        "The checker always directly interacts with your SWAGInference class and evaluate method.\n"
-        "You can remove this exception for local testing, but be aware that any changes to the main() method"
-        " are ignored when generating your submission file."
-    )
+    # raise RuntimeError(
+    #     "This main() method is for illustrative purposes only"
+    #     " and will NEVER be called when running your solution to generate your submission file!\n"
+    #     "The checker always directly interacts with your SWAGInference class and evaluate method.\n"
+    #     "You can remove this exception for local testing, but be aware that any changes to the main() method"
+    #     " are ignored when generating your submission file."
+    # )
 
     data_dir = pathlib.Path.cwd()
     model_dir = pathlib.Path.cwd()
@@ -113,13 +113,13 @@ class SWAGInference(object):
         model_dir: pathlib.Path,
         # TODO(1): change inference_mode to InferenceMode.SWAG_DIAGONAL
         # TODO(2): change inference_mode to InferenceMode.SWAG_FULL
-        inference_mode: InferenceMode = InferenceMode.MAP,
+        inference_mode: InferenceMode = InferenceMode.SWAG_DIAGONAL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 30,
+        swag_epochs: int = 1,
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 30,
+        bma_samples: int = 1,
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -153,7 +153,19 @@ class SWAGInference(object):
         #  as a dictionary that maps from weight name to values.
         #  Hint: you never need to consider the full vector of weights,
         #  but can always act on per-layer weights (in the format that _create_weight_copy() returns)
-
+        self.theta_swa = self._create_weight_copy()
+        self.theta_sq_avg = self._create_weight_copy()
+        # print(f"theta_swa: {self.theta_swa.keys()}")
+        self.current_swag_iteration = 0
+        
+        self.parameters = 0
+        self.D_dach = self._create_weight_copy()
+        for key in self.theta_swa.keys():
+            self.parameters += self.theta_swa[key].flatten().shape[0]
+            self.D_dach[key] = torch.zeros((self.D_dach[key].flatten().shape[0], self.deviation_matrix_max_rank))
+            # self.D_dach[key] = [torch.zeros_like(self.D_dach[key]) for i in range(self.deviation_matrix_max_rank)]
+        # print("SWAG-diagonal: theta_swa", self.theta_swa.keys())
+        
         # Full SWAG
         # TODO(2): create attributes for SWAG-diagonal
         #  Hint: check collections.deque
@@ -173,7 +185,11 @@ class SWAGInference(object):
         # SWAG-diagonal
         for name, param in current_params.items():
             # TODO(1): update SWAG-diagonal attributes for weight `name` using `current_params` and `param`
-            raise NotImplementedError("Update SWAG-diagonal statistics")
+            # raise NotImplementedError("Update SWAG-diagonal statistics")
+            # print(f"theta_swa[{name}] pre:  {self.theta_swa[name]}")
+            self.theta_swa[name] = (self.current_swag_iteration * self.theta_swa[name] + param) / (self.current_swag_iteration + 1)
+            self.theta_sq_avg[name] = (self.current_swag_iteration * self.theta_sq_avg[name] + param ** 2) / (self.current_swag_iteration + 1)
+            # print(f"theta_swa[{name}] post: {self.theta_swa[name]}")
 
         # Full SWAG
         if self.inference_mode == InferenceMode.SWAG_FULL:
@@ -209,8 +225,10 @@ class SWAGInference(object):
         )
 
         # TODO(1): Perform initialization for SWAG fitting
-        raise NotImplementedError("Initialize SWAG fitting")
-
+        # raise NotImplementedError("Initialize SWAG fitting")
+        self.update_swag()
+        self.current_swag_iteration += 1
+            
         self.network.train()
         with tqdm.trange(self.swag_epochs, desc="Running gradient descent for SWA") as pbar:
             pbar_dict = {}
@@ -241,7 +259,25 @@ class SWAGInference(object):
                     pbar.set_postfix(pbar_dict)
 
                 # TODO(1): Implement periodic SWAG updates using the attributes defined in __init__
-                raise NotImplementedError("Periodically update SWAG statistics")
+                # raise NotImplementedError("Periodically update SWAG statistics")
+                if (epoch + 1) % self.swag_update_freq == 0:
+                    self.update_swag()
+                    self.current_swag_iteration += 1
+                    
+                    # Create a copy of the current network weights
+                    current_params = {name: param.detach() for name, param in self.network.named_parameters()}
+                    for name, param in current_params.items():
+                        self.D_dach[name] = self.D_dach[name][:, 1:]
+                        # print(f"d_dach shape: {self.D_dach[name].shape}")
+                        # print(f"shape of other: {(param - self.theta_swa[name]).flatten().shape}")
+                        self.D_dach[name] = torch.cat([self.D_dach[name], (param - self.theta_swa[name]).flatten().unsqueeze(1)], dim=1)
+                        # print(f"d_dach shape post: {self.D_dach[name].shape}")
+                        # print(f"len pre:  {len(self.D_dach[name])}")
+                        # self.D_dach[name] += [param - self.theta_swa[name]]
+                        # print(f"len post: {len(self.D_dach[name])}")
+                        # print(f"current_params[{name}]: {current_params[name]}")
+                        # print(f"theta_swa[{name}]: {self.theta_swa[name]}")
+                        # print(f"D_dach[{name}]: {self.D_dach[name][self.deviation_matrix_max_rank - 1]}")
 
     def calibrate(self, validation_data: torch.utils.data.Dataset) -> None:
         """
@@ -282,14 +318,85 @@ class SWAGInference(object):
         # for each datapoint, you can save time by sampling self.bma_samples networks,
         # and perform inference with each network on all samples in loader.
         per_model_sample_predictions = []
-        for _ in tqdm.trange(self.bma_samples, desc="Performing Bayesian model averaging"):
+        for i in tqdm.trange(self.bma_samples, desc="Performing Bayesian model averaging"):
             # TODO(1): Sample new parameters for self.network from the SWAG approximate posterior
-            raise NotImplementedError("Sample network parameters")
+            # raise NotImplementedError("Sample network parameters")
 
+            print(f"parameters: {self.parameters}")
+            z_2 = torch.from_numpy(np.random.multivariate_normal(mean=np.zeros(self.deviation_matrix_max_rank), cov=np.identity(self.deviation_matrix_max_rank))).float()
+            # print(f"z_2: {z_2.shape}")
+            
+            theta_tilde = self._create_weight_copy()
+            for key in theta_tilde.keys():
+
+                # print(f"---------------------------------------------------")
+                # number of parameters in current layer
+                num_params = theta_tilde[key].flatten().shape[0]
+                # print(f"num_params: {num_params}")
+                
+                mean = [0]
+                cov = [[1]]
+                # current_z_1 = torch.from_numpy(np.random.multivariate_normal(mean=np.zeros(num_params), cov=np.identity(num_params))).float()
+                current_z_1 = torch.from_numpy(np.random.multivariate_normal(mean=mean, cov=cov, size=num_params)).float()
+                # print(f"z_1: {current_z_1.shape}")
+
+                
+                
+                swa_squared = self.theta_swa[key] ** 2
+                # print(f"swa_squared: {swa_squared.shape}")
+                
+                sigma_diag = torch.from_numpy(np.diag((self.theta_sq_avg[key].flatten() - swa_squared.flatten())))
+                # print(f"sigma_diag: {sigma_diag.shape}")
+                
+                left_part = self.theta_swa[key].reshape(num_params)
+                # print(f"left_part: {left_part.shape}")
+                
+                middle_scalar = (1 / np.sqrt(2))
+                # print(f"middle_scalar: {middle_scalar}")
+                middle_part = (sigma_diag ** (0.5)).matmul(current_z_1).reshape(num_params)
+                # print(f"middle_part: {middle_part.shape}")
+                
+                right_scalar = (1 / (np.sqrt(2 * (self.deviation_matrix_max_rank - 1))))
+                # print(f"right_scalar: {right_scalar}")
+                right_part = self.D_dach[key].matmul(z_2)
+                # print(f"right_part: {right_part.shape}")
+                
+                theta_tilde[key] = left_part.add(middle_scalar * middle_part).add(right_scalar * right_part)
+                # theta_tilde[key] = self.theta_swa[key].reshape(1, num_params) + ((1/np.sqrt(2)) * (sigma_diag ** (0.5)).matmul(current_z_1)) + (1 / (np.sqrt(2 * (self.deviation_matrix_max_rank - 1)))) * self.D_dach[key].matmul(z_2)
+                # print(f"theta_tilde shape: {theta_tilde[key].shape}")
+
+            after_training_pred = torch.Tensor()
+            for (batch_xs, ) in loader:
+                # print(f"predictions: {self.network(batch_xs)}")
+                after_training_pred = torch.cat([after_training_pred, self.network(batch_xs)], dim=0)
+            
+            after_training_pred = torch.nn.Softmax(dim=1)(after_training_pred)
+            
+            print(f"after_training_pred: {after_training_pred[0]}")
+            print(f"prob sum: {torch.sum(after_training_pred[0])}")
+            
             # TODO(1): Perform inference for all samples in `loader` using current model sample,
             #  and add the predictions to per_model_sample_predictions
-            raise NotImplementedError("Perform inference using current model")
+            # raise NotImplementedError("Perform inference using current model")
+            for name, param in self.network.named_parameters():
+                # print(name)
+                # print(f"param shape: {param.shape}")
+                # print(f"theta_tilde shape: {theta_tilde[name].shape}")
+                param = theta_tilde[name].reshape(param.shape)
+                
+                # Create a copy of the current network weights
+                current_params = {name: param.detach() for name, param in self.network.named_parameters()}
+                print(f"param diff: {torch.sum(torch.abs(current_params[name].flatten() - theta_tilde[name].flatten()))}")
 
+            per_model_sample_predictions.append(torch.Tensor())
+            for (batch_xs,) in loader:
+                # print(f"type of network(batch_xs): {type(self.network(batch_xs))}")
+                per_model_sample_predictions[i] = torch.cat([per_model_sample_predictions[i], self.network(batch_xs)], dim=0)
+            print(f"per_model_sample_predictions: {per_model_sample_predictions[i][0]}")
+
+            # print(f"per_model_sample_predictions: {per_model_sample_predictions}")
+            # print(f"len per_model_sample_predictions: {len(per_model_sample_predictions)}")
+            print(f" shape per_model_sample_predictions: {per_model_sample_predictions[i].shape}")
         assert len(per_model_sample_predictions) == self.bma_samples
         assert all(
             isinstance(model_sample_predictions, torch.Tensor)
@@ -299,8 +406,12 @@ class SWAGInference(object):
         )
 
         # TODO(1): Average predictions from different model samples into bma_probabilities
-        raise NotImplementedError("Aggregate predictions from model samples")
-        bma_probabilities = ...
+        # raise NotImplementedError("Aggregate predictions from model samples")
+        print(f"per_model_sample_predictions: {len(per_model_sample_predictions)}")
+        bma_probabilities = torch.zeros_like(per_model_sample_predictions[0])
+        for i in range(len(per_model_sample_predictions)):
+            bma_probabilities += per_model_sample_predictions[i] / self.bma_samples
+        # print(f"bma_probabilities: {bma_probabilities}")
 
         assert bma_probabilities.dim() == 2 and bma_probabilities.size(1) == 6  # N x C
         return bma_probabilities
