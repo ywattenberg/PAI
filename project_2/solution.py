@@ -144,6 +144,9 @@ class SWAGInference(object):
         # Note that all operations in this class modify this network IN-PLACE!
         self.network = CNN(in_channels=3, out_classes=6)
 
+        for name, params in self.network.named_parameters():
+            print(f"name: {name}")
+
         # Store training dataset to recalculate batch normalization statistics during SWAG inference
         self.train_dataset = torch.utils.data.TensorDataset(train_xs)
 
@@ -338,30 +341,41 @@ class SWAGInference(object):
                 cov = [[1]]
                 # current_z_1 = torch.from_numpy(np.random.multivariate_normal(mean=np.zeros(num_params), cov=np.identity(num_params))).float()
                 current_z_1 = torch.from_numpy(np.random.multivariate_normal(mean=mean, cov=cov, size=num_params)).float()
-                # print(f"z_1: {current_z_1.shape}")
+                print(f"z_1 shape: {current_z_1.shape}")
 
                 
                 
                 swa_squared = self.theta_swa[key] ** 2
+                print(f"after swa_sqaured nan?: {torch.isnan(swa_squared).any()}")
                 # print(f"swa_squared: {swa_squared.shape}")
                 
                 sigma_diag = torch.from_numpy(np.diag((self.theta_sq_avg[key].flatten() - swa_squared.flatten())))
                 # print(f"sigma_diag: {sigma_diag.shape}")
+                print(f"after sigma_diag nan?: {torch.isnan(sigma_diag).any()}")
+
                 
                 left_part = self.theta_swa[key].reshape(num_params)
+                print(f"after left_part nan?: {torch.isnan(left_part).any()}")
+
                 # print(f"left_part: {left_part.shape}")
                 
                 middle_scalar = (1 / np.sqrt(2))
+                print(f"after middle_scalar nan?: {np.isnan(middle_scalar).any()}")
+
                 # print(f"middle_scalar: {middle_scalar}")
                 middle_part = (sigma_diag ** (0.5)).matmul(current_z_1).reshape(num_params)
+                print(f"after middle_part nan?: {np.isnan(middle_part).any()}")
                 # print(f"middle_part: {middle_part.shape}")
                 
                 right_scalar = (1 / (np.sqrt(2 * (self.deviation_matrix_max_rank - 1))))
+                print(f"after riight_scalar nan?: {np.isnan(right_scalar).any()}")
                 # print(f"right_scalar: {right_scalar}")
                 right_part = self.D_dach[key].matmul(z_2)
+                print(f"after right_part nan?: {np.isnan(right_part).any()}")
                 # print(f"right_part: {right_part.shape}")
                 
                 theta_tilde[key] = left_part.add(middle_scalar * middle_part).add(right_scalar * right_part)
+                print(f"after tehta_tilde nan?: {torch.isnan(theta_tilde[key]).any()}")
                 # theta_tilde[key] = self.theta_swa[key].reshape(1, num_params) + ((1/np.sqrt(2)) * (sigma_diag ** (0.5)).matmul(current_z_1)) + (1 / (np.sqrt(2 * (self.deviation_matrix_max_rank - 1)))) * self.D_dach[key].matmul(z_2)
                 # print(f"theta_tilde shape: {theta_tilde[key].shape}")
 
@@ -379,14 +393,24 @@ class SWAGInference(object):
             #  and add the predictions to per_model_sample_predictions
             # raise NotImplementedError("Perform inference using current model")
             for name, param in self.network.named_parameters():
-                # print(name)
-                # print(f"param shape: {param.shape}")
-                # print(f"theta_tilde shape: {theta_tilde[name].shape}")
-                param = theta_tilde[name].reshape(param.shape)
+                param.data = theta_tilde[name].reshape(param.shape)
+
+            for name,param in self.network.named_parameters():
+                diff = torch.sum(torch.abs(param.flatten() - theta_tilde[name]))
+
+                if math.isnan(diff):
+                    print("was nan:")
+                    print(f"params nan checking: {torch.isnan(param).any()}")
+                    print(f"theta nan checking: {torch.isnan(theta_tilde[name]).any()}")
+                    print(f"params: {param.flatten()}")
+                    print(f"params shape: {param.shape}")
+                    print(f"theta: {theta_tilde[name]}")
+                    print(f"theta shape: {theta_tilde[name].shape}")
+                    print(f"name: {name}")
+                else:
+                    print(f"not nan, diff: {diff}")
                 
-                # Create a copy of the current network weights
-                current_params = {name: param.detach() for name, param in self.network.named_parameters()}
-                print(f"param diff: {torch.sum(torch.abs(current_params[name].flatten() - theta_tilde[name].flatten()))}")
+            
 
             per_model_sample_predictions.append(torch.Tensor())
             for (batch_xs,) in loader:
