@@ -115,7 +115,7 @@ class SWAGInference(object):
         # TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_DIAGONAL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 30,
+        swag_epochs: int = 5, # TODO: change back to 30
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
@@ -259,9 +259,9 @@ class SWAGInference(object):
                 # (Done)TODO(1): Implement periodic SWAG updates using the attributes defined in __init__
                 if epoch % self.swag_update_freq == 0:
                     self.update_swag()
-                    for name, param in self._swag_diagonal_mean.items():
-                        print(f"Negative STD in {name}")
-                        print(f"Number of negative Elements: {((self._swag_diagonal_std[name] - self._swag_diagonal_mean[name]**2)<0).sum()}")
+                    # for name, param in self._swag_diagonal_mean.items():
+                        # print(f"Negative STD in {name}")
+                        # print(f"Number of negative Elements: {((self._swag_diagonal_std[name] - self._swag_diagonal_mean[name]**2)<0).sum()}")
 
     def calibrate(self, validation_data: torch.utils.data.Dataset) -> None:
         """
@@ -304,11 +304,23 @@ class SWAGInference(object):
         per_model_sample_predictions = []
         for _ in tqdm.trange(self.bma_samples, desc="Performing Bayesian model averaging"):
             # TODO(1): Sample new parameters for self.network from the SWAG approximate posterior
-            raise NotImplementedError("Sample network parameters")
+            for name, _ in self.network.named_parameters():
+                mean = self._swag_diagonal_mean[name]
+                std = self._swag_diagonal_std[name]
+                cov = std - mean**2
+                eps = torch.randn_like(mean)
+                sampled_params = mean + torch.sqrt(cov)*eps
+
+                # Update network weights
+                self.network.__setattr__(name, sampled_params)
 
             # TODO(1): Perform inference for all samples in `loader` using current model sample,
             #  and add the predictions to per_model_sample_predictions
-            raise NotImplementedError("Perform inference using current model")
+            for (batch_xs,) in loader:
+                per_model_sample_predictions.append(self.network(batch_xs))
+                print(batch_xs.shape)
+        print(per_model_sample_predictions[0].shape)
+        print(f" per model pred: {len(per_model_sample_predictions)}, bma_samples: {self.bma_samples}")
 
         assert len(per_model_sample_predictions) == self.bma_samples
         assert all(
