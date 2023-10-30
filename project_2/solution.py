@@ -326,7 +326,7 @@ class SWAGInference(object):
             # raise NotImplementedError("Sample network parameters")
 
             print(f"parameters: {self.parameters}")
-            z_2 = torch.from_numpy(np.random.multivariate_normal(mean=np.zeros(self.deviation_matrix_max_rank), cov=np.identity(self.deviation_matrix_max_rank))).float()
+            z_2 = torch.from_numpy(np.random.normal(loc=0, scale=1, size=self.deviation_matrix_max_rank)).float()
             # print(f"z_2: {z_2.shape}")
             
             theta_tilde = self._create_weight_copy()
@@ -340,13 +340,15 @@ class SWAGInference(object):
                 mean = [0]
                 cov = [[1]]
                 # current_z_1 = torch.from_numpy(np.random.multivariate_normal(mean=np.zeros(num_params), cov=np.identity(num_params))).float()
-                current_z_1 = torch.from_numpy(np.random.multivariate_normal(mean=mean, cov=cov, size=num_params)).float()
+                current_z_1 = torch.from_numpy(np.random.normal(loc=0, scale=1, size=num_params)).float()
                 print(f"z_1 shape: {current_z_1.shape}")
 
                 
                 
-                swa_squared = self.theta_swa[key] ** 2
-                print(f"after swa_sqaured nan?: {torch.isnan(swa_squared).any()}")
+                swa_squared = np.power(self.theta_swa[key], 2)
+                print(f"min element swa_squared: {torch.min(swa_squared)}")
+                if torch.isnan(self.theta_swa[key]).any():
+                    print(f"after swa_sqaured nan?: {torch.isnan(swa_squared).any()}")
                 # print(f"swa_squared: {swa_squared.shape}")
                 
                 sigma_diag = torch.from_numpy(np.diag((self.theta_sq_avg[key].flatten() - swa_squared.flatten())))
@@ -363,8 +365,8 @@ class SWAGInference(object):
                 print(f"after middle_scalar nan?: {np.isnan(middle_scalar).any()}")
 
                 # print(f"middle_scalar: {middle_scalar}")
-                middle_part = (sigma_diag ** (0.5)).matmul(current_z_1).reshape(num_params)
-                print(f"min element sigma: {torch.min(sigma_diag)}")
+                middle_part = (np.sqrt(sigma_diag)).matmul(current_z_1).reshape(num_params)
+                print(f"min element sigma_diag: {torch.min(sigma_diag)}")
                 print(f"min element z1: {torch.min(current_z_1)}")
                 print(f"after middle_part nan?: {np.isnan(middle_part).any()}")
                 # print(f"middle_part: {middle_part.shape}")
