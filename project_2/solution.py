@@ -186,12 +186,13 @@ class SWAGInference(object):
             # (Done)TODO(1): update SWAG-diagonal attributes for weight `name` using `current_params` and `param`
             self._swag_diagonal_mean[name] = (self._swag_diagonal_mean[name]*self._update_count + param) / (self._update_count + 1)
             self._swag_diagonal_std[name] = (self._swag_diagonal_std[name]*self._update_count + param**2) / (self._update_count + 1)
-            self._update_count += 1
+        
 
         # Full SWAG
         if self.inference_mode == InferenceMode.SWAG_FULL:
             # TODO(2): update full SWAG attributes for weight `name` using `current_params` and `param`
             raise NotImplementedError("Update full SWAG statistics")
+        self._update_count += 1
 
     def fit_swag(self, loader: torch.utils.data.DataLoader) -> None:
         """
