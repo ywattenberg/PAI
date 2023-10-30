@@ -364,6 +364,8 @@ class SWAGInference(object):
 
                 # print(f"middle_scalar: {middle_scalar}")
                 middle_part = (sigma_diag ** (0.5)).matmul(current_z_1).reshape(num_params)
+                print(f"min element sigma: {torch.min(sigma_diag)}")
+                print(f"min element z1: {torch.min(current_z_1)}")
                 print(f"after middle_part nan?: {np.isnan(middle_part).any()}")
                 # print(f"middle_part: {middle_part.shape}")
                 
