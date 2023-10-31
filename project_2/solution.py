@@ -115,11 +115,11 @@ class SWAGInference(object):
         # TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_DIAGONAL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 30, 
+        swag_epochs: int = 40, 
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 5, 
+        bma_samples: int = 40, 
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -308,7 +308,7 @@ class SWAGInference(object):
             # Update network weights
             # (DONE)TODO(1): Perform inference for all samples in `loader` using current model sample,
             # and add the predictions to per_model_sample_predictions
-            per_model_sample_predictions.append(torch.cat([self.network(batch_xs) for (batch_xs,) in loader]))
+            per_model_sample_predictions.append(torch.cat([torch.softmax(self.network(batch_xs), dim=-1) for (batch_xs,) in loader]))
         
         # batch_xs, = next(iter(loader))
         # print(f"batch size: {batch_xs.size()}")
@@ -328,7 +328,7 @@ class SWAGInference(object):
         # normalize probabilities per row to sum to 1
          # NUMERICAL PROPS: bma_probabilities = bma_probabilities / bma_probabilities.sum(dim=-1).unsqueeze(-1)
         bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
-        bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
+        #bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
         print(f"sum of rows: {bma_probabilities.sum(dim=-1)}")
         assert bma_probabilities.sum(dim=-1).allclose(torch.ones(bma_probabilities.size(0)))
         assert torch.ones(bma_probabilities.size(0)).equal(bma_probabilities.sum(dim=-1))
