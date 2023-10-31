@@ -119,7 +119,7 @@ class SWAGInference(object):
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 30, 
+        bma_samples: int = 5, 
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -325,6 +325,14 @@ class SWAGInference(object):
         # (DONE)TODO(1): Average predictions from different model samples into bma_probabilities
         bma_probabilities = torch.mean(torch.stack(per_model_sample_predictions), dim=0)
 
+        # normalize probabilities per row to sum to 1
+         # NUMERICAL PROPS: bma_probabilities = bma_probabilities / bma_probabilities.sum(dim=-1).unsqueeze(-1)
+        bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
+        bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
+        print(f"sum of rows: {bma_probabilities.sum(dim=-1)}")
+        assert bma_probabilities.sum(dim=-1).allclose(torch.ones(bma_probabilities.size(0)))
+        assert torch.ones(bma_probabilities.size(0)).equal(bma_probabilities.sum(dim=-1))
+        
         assert bma_probabilities.dim() == 2 and bma_probabilities.size(1) == 6  # N x C
         return bma_probabilities
 
@@ -345,6 +353,7 @@ class SWAGInference(object):
             current_mean = self._swag_diagonal_mean[name]
             current_std = self._swag_diagonal_std[name]
             current_std = current_std - current_mean**2
+            assert (current_std < 0).sum() == 0
             assert current_mean.size() == param.size() and current_std.size() == param.size()
 
             # Diagonal part
