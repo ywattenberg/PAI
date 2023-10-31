@@ -75,11 +75,12 @@ def main():
     )
     swag.fit(train_loader)
     swag.calibrate(dataset_val)
-
     # fork_rng ensures that the evaluation does not change the rng state.
     # That way, you should get exactly the same results even if you remove evaluation
     # to save computational time when developing the task
     # (as long as you ONLY use torch randomness, and not e.g. random or numpy.random).
+
+    
     with torch.random.fork_rng():
         evaluate(swag, dataset_val, EXTENDED_EVALUATION, output_dir)
 
@@ -119,7 +120,7 @@ class SWAGInference(object):
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 40, 
+        bma_samples: int = 30, 
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -156,6 +157,7 @@ class SWAGInference(object):
         self._swag_diagonal_mean = self._create_weight_copy()
         self._swag_diagonal_std = self._create_weight_copy()
         self._update_count = 0
+        self.use_cuda = torch.cuda.is_available()
         # Full SWAG
         # TODO(2): create attributes for SWAG-diagonal
         #  Hint: check collections.deque
@@ -180,7 +182,9 @@ class SWAGInference(object):
 
         # Create a copy of the current network weights
         current_params = {name: param.detach() for name, param in self.network.named_parameters()}
-
+        if self.use_cuda():
+            current_params = current_params.to('cpu')
+            
         # SWAG-diagonal
         for name, param in current_params.items():
             # (Done)TODO(1): update SWAG-diagonal attributes for weight `name` using `current_params` and `param`
@@ -224,8 +228,6 @@ class SWAGInference(object):
 
         # (Done)TODO(1): Perform initialization for SWAG fitting
         self.reset_swag_statistics()
-        self.update_swag()
-        
 
         self.network.train()
         with tqdm.trange(self.swag_epochs, desc="Running gradient descent for SWA") as pbar:
@@ -276,7 +278,7 @@ class SWAGInference(object):
 
         # TODO(1): pick a prediction threshold, either constant or adaptive.
         #  The provided value should suffice to pass the easy baseline.
-        self._prediction_threshold = 2.0 / 3.0
+        self._prediction_threshold = 0.7
 
         # TODO(2): perform additional calibration if desired.
         #  Feel free to remove or change the prediction threshold.
@@ -308,7 +310,7 @@ class SWAGInference(object):
             # Update network weights
             # (DONE)TODO(1): Perform inference for all samples in `loader` using current model sample,
             # and add the predictions to per_model_sample_predictions
-            per_model_sample_predictions.append(torch.cat([torch.softmax(self.network(batch_xs), dim=-1) for (batch_xs,) in loader]))
+            per_model_sample_predictions.append(torch.cat([self.network(batch_xs) for (batch_xs,) in loader]))
         
         # batch_xs, = next(iter(loader))
         # print(f"batch size: {batch_xs.size()}")
@@ -324,14 +326,10 @@ class SWAGInference(object):
 
         # (DONE)TODO(1): Average predictions from different model samples into bma_probabilities
         bma_probabilities = torch.mean(torch.stack(per_model_sample_predictions), dim=0)
-
         # normalize probabilities per row to sum to 1
-         # NUMERICAL PROPS: bma_probabilities = bma_probabilities / bma_probabilities.sum(dim=-1).unsqueeze(-1)
+        # NUMERICAL PROPS: bma_probabilities = bma_probabilities / bma_probabilities.sum(dim=-1).unsqueeze(-1)
         bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
         #bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
-        print(f"sum of rows: {bma_probabilities.sum(dim=-1)}")
-        assert bma_probabilities.sum(dim=-1).allclose(torch.ones(bma_probabilities.size(0)))
-        assert torch.ones(bma_probabilities.size(0)).equal(bma_probabilities.sum(dim=-1))
         
         assert bma_probabilities.dim() == 2 and bma_probabilities.size(1) == 6  # N x C
         return bma_probabilities
