@@ -116,9 +116,9 @@ class SWAGInference(object):
         # TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_DIAGONAL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 40, 
+        swag_epochs: int = 60, 
         swag_learning_rate: float = 0.045,
-        swag_update_freq: int = 1,
+        swag_update_freq: int = 2,
         deviation_matrix_max_rank: int = 15,
         bma_samples: int = 30, 
     ):
@@ -182,8 +182,6 @@ class SWAGInference(object):
 
         # Create a copy of the current network weights
         current_params = {name: param.detach() for name, param in self.network.named_parameters()}
-        if self.use_cuda():
-            current_params = current_params.to('cpu')
             
         # SWAG-diagonal
         for name, param in current_params.items():
@@ -442,11 +440,16 @@ class SWAGInference(object):
         decay_factor = decayed_lr / initial_lr
 
         # Create optimizer, loss, and a learning rate scheduler that aids convergence
-        optimizer = torch.optim.SGD(
+        # optimizer = torch.optim.SGD(
+        #     self.network.parameters(),
+        #     lr=initial_lr,
+        #     momentum=0.9,
+        #     nesterov=False,
+        #     weight_decay=1e-4,
+        # )
+        optimizer = torch.optim.Adam(
             self.network.parameters(),
-            lr=initial_lr,
-            momentum=0.9,
-            nesterov=False,
+            lr = 0.001,
             weight_decay=1e-4,
         )
         loss = torch.nn.CrossEntropyLoss(
@@ -466,6 +469,12 @@ class SWAGInference(object):
             milestones=[decay_start_epoch * len(loader)],
         )
 
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            device = torch.device("cpu")
+        self.network = self.network.to(device)
+        print(f"Using device: {device}")
         # Put network into training mode
         # Batch normalization layers are only updated if the network is in training mode,
         # and are replaced by a moving average if the network is in evaluation mode.
@@ -480,6 +489,8 @@ class SWAGInference(object):
                 # Iterate over batches of randomly shuffled training data
                 for batch_xs, _, _, batch_ys in loader:
                     # Training step
+                    batch_ys = batch_ys.to(device)
+                    batch_xs = batch_xs.to(device)
                     optimizer.zero_grad()
                     pred_ys = self.network(batch_xs)
                     batch_loss = loss(input=pred_ys, target=batch_ys)
@@ -506,6 +517,10 @@ class SWAGInference(object):
                     pbar_dict["avg. epoch loss"] = average_loss
                     pbar_dict["avg. epoch accuracy"] = average_accuracy
                     pbar.set_postfix(pbar_dict)
+
+        self.network = self.network.to('cpu')
+        # Save weights
+        torch.save(self.network.state_dict(), self.model_dir / "custom_map_weights.pt")
 
     def predict_probabilities(self, xs: torch.Tensor) -> torch.Tensor:
         """
