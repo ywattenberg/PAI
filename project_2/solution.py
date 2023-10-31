@@ -115,11 +115,11 @@ class SWAGInference(object):
         # TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_DIAGONAL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 5, # TODO: change back to 30
+        swag_epochs: int = 30, 
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 30,
+        bma_samples: int = 30, 
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -303,24 +303,16 @@ class SWAGInference(object):
         # and perform inference with each network on all samples in loader.
         per_model_sample_predictions = []
         for _ in tqdm.trange(self.bma_samples, desc="Performing Bayesian model averaging"):
-            # TODO(1): Sample new parameters for self.network from the SWAG approximate posterior
-            for name, _ in self.network.named_parameters():
-                mean = self._swag_diagonal_mean[name]
-                std = self._swag_diagonal_std[name]
-                cov = std - mean**2
-                eps = torch.randn_like(mean)
-                sampled_params = mean + torch.sqrt(cov)*eps
-
-                # Update network weights
-                self.network.__setattr__(name, sampled_params)
-
-            # TODO(1): Perform inference for all samples in `loader` using current model sample,
-            #  and add the predictions to per_model_sample_predictions
-            for (batch_xs,) in loader:
-                per_model_sample_predictions.append(self.network(batch_xs))
-                print(batch_xs.shape)
-        print(per_model_sample_predictions[0].shape)
-        print(f" per model pred: {len(per_model_sample_predictions)}, bma_samples: {self.bma_samples}")
+            # (DONE)TODO(1): Sample new parameters for self.network from the SWAG approximate posterior
+            self.sample_parameters()
+            # Update network weights
+            # (DONE)TODO(1): Perform inference for all samples in `loader` using current model sample,
+            # and add the predictions to per_model_sample_predictions
+            per_model_sample_predictions.append(torch.cat([self.network(batch_xs) for (batch_xs,) in loader]))
+        
+        # batch_xs, = next(iter(loader))
+        # print(f"batch size: {batch_xs.size()}")
+        # print(f"#N: {len(loader)} per model pred: {len(per_model_sample_predictions)}, bma_samples: {self.bma_samples}")
 
         assert len(per_model_sample_predictions) == self.bma_samples
         assert all(
@@ -330,9 +322,8 @@ class SWAGInference(object):
             for model_sample_predictions in per_model_sample_predictions
         )
 
-        # TODO(1): Average predictions from different model samples into bma_probabilities
-        raise NotImplementedError("Aggregate predictions from model samples")
-        bma_probabilities = ...
+        # (DONE)TODO(1): Average predictions from different model samples into bma_probabilities
+        bma_probabilities = torch.mean(torch.stack(per_model_sample_predictions), dim=0)
 
         assert bma_probabilities.dim() == 2 and bma_probabilities.size(1) == 6  # N x C
         return bma_probabilities
@@ -348,10 +339,12 @@ class SWAGInference(object):
         for name, param in self.network.named_parameters():
             # SWAG-diagonal part
             z_1 = torch.randn(param.size())
-            # TODO(1): Sample parameter values for SWAG-diagonal
-            raise NotImplementedError("Sample parameter for SWAG-diagonal")
-            current_mean = ...
-            current_std = ...
+            # (DONE)TODO(1): Sample parameter values for SWAG-diagonal
+            # TODO(1): Please check for correctness
+           
+            current_mean = self._swag_diagonal_mean[name]
+            current_std = self._swag_diagonal_std[name]
+            current_std = current_std - current_mean**2
             assert current_mean.size() == param.size() and current_std.size() == param.size()
 
             # Diagonal part
@@ -366,9 +359,10 @@ class SWAGInference(object):
             # Modify weight value in-place; directly changing self.network
             param.data = sampled_param
 
-        # TODO(1): Don't forget to update batch normalization statistics using self._update_batchnorm()
+        # (DONE)TODO(1): Don't forget to update batch normalization statistics using self._update_batchnorm()
         #  in the appropriate place!
-        raise NotImplementedError("Update batch normalization statistics for newly sampled network")
+        self._update_batchnorm()
+        #raise NotImplementedError("Update batch normalization statistics for newly sampled network")
 
     def predict_labels(self, predicted_probabilities: torch.Tensor) -> torch.Tensor:
         """
