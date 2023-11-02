@@ -113,7 +113,7 @@ class SWAGInference(object):
         train_xs: torch.Tensor,
         model_dir: pathlib.Path,
         # (DONE)TODO(1): change inference_mode to InferenceMode.SWAG_DIAGONAL 
-        # TODO(2): change inference_mode to InferenceMode.SWAG_FULL
+        # (DONE)TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_DIAGONAL,
         # TODO(2): optionally add/tweak hyperparameters
         swag_epochs: int = 30, 
@@ -163,11 +163,14 @@ class SWAGInference(object):
 
         self.network = self.network.to(self.device)
         # Full SWAG
-        # TODO(2): create attributes for SWAG-diagonal
+        # (DONE)TODO(2): create attributes for SWAG-diagonal
         #  Hint: check collections.deque
+        if self.deviation_matrix_max_rank > self.swag_epochs:
+            self.deviation_matrix_max_rank = self.swag_epochs
+        self._D_dach = [self._create_weight_copy for i in range(self.deviation_matrix_max_rank)]
 
         # Calibration, prediction, and other attributes
-        # TODO(2): create additional attributes, e.g., for calibration
+        # (LATER)TODO(2): create additional attributes, e.g., for calibration
         self._prediction_threshold = None  # this is an example, feel free to be creative
 
     def reset_swag_statistics(self) -> None:
@@ -175,7 +178,8 @@ class SWAGInference(object):
         self._swag_diagonal_std = self._create_weight_copy()
         self._update_count = 0
 
-        # TODO(2): reset full SWAG statistics
+        # (DONE)TODO(2): reset full SWAG statistics
+        self._D_dach = [self._create_weight_copy for i in range(self.deviation_matrix_max_rank)]        
         return
     
 
@@ -185,18 +189,25 @@ class SWAGInference(object):
         """
         # Create a copy of the current network weights
         current_params = {name: param.detach() for name, param in self.network.named_parameters()}
+        params_diff = self._create_weight_copy()
             
         # SWAG-diagonal
         for name, param in current_params.items():
             # (Done)TODO(1): update SWAG-diagonal attributes for weight `name` using `current_params` and `param`
             self._swag_diagonal_mean[name] = (self._swag_diagonal_mean[name]*self._update_count + param) / (self._update_count + 1)
             self._swag_diagonal_std[name] = (self._swag_diagonal_std[name]*self._update_count + param**2) / (self._update_count + 1)
+            
+            # for full SWAG
+            if self.inference_mode == InferenceMode.SWAG_FULL:
+                params_diff[name] = param - self._swag_diagonal_mean[name]
         
 
         # Full SWAG
         if self.inference_mode == InferenceMode.SWAG_FULL:
             # TODO(2): update full SWAG attributes for weight `name` using `current_params` and `param`
-            raise NotImplementedError("Update full SWAG statistics")
+            self._D_dach.pop(0)
+            self._D_dach.append(params_diff)
+            
         self._update_count += 1
 
     def fit_swag(self, loader: torch.utils.data.DataLoader) -> None:
@@ -219,7 +230,7 @@ class SWAGInference(object):
         loss = torch.nn.CrossEntropyLoss(
             reduction="mean",
         )
-        # TODO(2): Update SWAGScheduler instantiation if you decided to implement a custom schedule.
+        # (LATER)TODO(2): Update SWAGScheduler instantiation if you decided to implement a custom schedule.
         #  By default, this scheduler just keeps the initial learning rate given to `optimizer`.
         lr_scheduler = SWAGScheduler(
             optimizer,
@@ -284,7 +295,7 @@ class SWAGInference(object):
         #  The provided value should suffice to pass the easy baseline.
         self._prediction_threshold = 2.0 / 3.0
 
-        # TODO(2): perform additional calibration if desired.
+        # (LATER)TODO(2): perform additional calibration if desired.
         #  Feel free to remove or change the prediction threshold.
         val_xs, val_is_snow, val_is_cloud, val_ys = validation_data.tensors
         assert val_xs.size() == (140, 3, 60, 60)  # N x C x H x W
@@ -360,13 +371,14 @@ class SWAGInference(object):
             assert current_mean.size() == param.size() and current_cov.size() == param.size()
 
             # Diagonal part
-            sampled_param = torch.normal(current_mean, torch.sqrt(current_cov)) # current_mean + current_std * z_1
+            sampled_param = current_mean + 1/np.sqrt(2) * torch.sqrt(current_cov) * torch.normal(0, torch.ones_like(current_mean)) # current_mean + current_std * z_1
 
             # Full SWAG part
             if self.inference_mode == InferenceMode.SWAG_FULL:
                 # TODO(2): Sample parameter values for full SWAG
-                raise NotImplementedError("Sample parameter for full SWAG")
-                sampled_param += ...
+                #  Hint: check collections.deque
+                normalizer = 1.0/np.sqrt(2*(self.deviation_matrix_max_rank-1))
+                sampled_param += torch.normal(0, normalizer* self._D_dach[0][name])
             # Modify weight value in-place; directly changing self.network
             param.data = sampled_param
 
