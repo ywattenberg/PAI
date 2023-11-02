@@ -15,7 +15,7 @@ from matplotlib import pyplot as plt
 
 from util import draw_reliability_diagram, cost_function, setup_seeds, calc_calibration_curve
 
-EXTENDED_EVALUATION = False
+EXTENDED_EVALUATION = True
 """
 Set `EXTENDED_EVALUATION` to `True` in order to generate additional plots on validation data.
 """
@@ -116,9 +116,9 @@ class SWAGInference(object):
         # TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_DIAGONAL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 60, 
+        swag_epochs: int = 1, 
         swag_learning_rate: float = 0.045,
-        swag_update_freq: int = 2,
+        swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
         bma_samples: int = 30, 
     ):
@@ -179,7 +179,6 @@ class SWAGInference(object):
         """
         Update SWAG statistics with the current weights of self.network.
         """
-
         # Create a copy of the current network weights
         current_params = {name: param.detach() for name, param in self.network.named_parameters()}
             
@@ -226,6 +225,7 @@ class SWAGInference(object):
 
         # (Done)TODO(1): Perform initialization for SWAG fitting
         self.reset_swag_statistics()
+        self.update_swag()
 
         self.network.train()
         with tqdm.trange(self.swag_epochs, desc="Running gradient descent for SWA") as pbar:
@@ -276,7 +276,7 @@ class SWAGInference(object):
 
         # TODO(1): pick a prediction threshold, either constant or adaptive.
         #  The provided value should suffice to pass the easy baseline.
-        self._prediction_threshold = 0.7
+        self._prediction_threshold = 2.0 / 3.0
 
         # TODO(2): perform additional calibration if desired.
         #  Feel free to remove or change the prediction threshold.
@@ -340,27 +340,26 @@ class SWAGInference(object):
         """
 
         # Instead of acting on a full vector of parameters, all operations can be done on per-layer parameters.
+
+
+        
         for name, param in self.network.named_parameters():
             # SWAG-diagonal part
-            z_1 = torch.randn(param.size())
-            # (DONE)TODO(1): Sample parameter values for SWAG-diagonal
-            # TODO(1): Please check for correctness
-           
             current_mean = self._swag_diagonal_mean[name]
-            current_std = self._swag_diagonal_std[name]
-            current_std = current_std - current_mean**2
-            assert (current_std < 0).sum() == 0
+            current_sq_mean = self._swag_diagonal_std[name]
+            current_std = current_sq_mean - current_mean**2
+
+            # (DONE)TODO(1): Sample parameter values for SWAG-diagonal
             assert current_mean.size() == param.size() and current_std.size() == param.size()
 
             # Diagonal part
-            sampled_param = current_mean + current_std * z_1
+            sampled_param = torch.normal(current_mean, current_std) # current_mean + current_std * z_1
 
             # Full SWAG part
             if self.inference_mode == InferenceMode.SWAG_FULL:
                 # TODO(2): Sample parameter values for full SWAG
                 raise NotImplementedError("Sample parameter for full SWAG")
                 sampled_param += ...
-
             # Modify weight value in-place; directly changing self.network
             param.data = sampled_param
 
