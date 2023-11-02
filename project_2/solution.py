@@ -116,11 +116,11 @@ class SWAGInference(object):
         # TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_DIAGONAL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 30, 
+        swag_epochs: int = 90, 
         swag_learning_rate: float = 0.045,
-        swag_update_freq: int = 1,
+        swag_update_freq: int = 3,
         deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 30, 
+        bma_samples: int = 60, 
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -157,7 +157,10 @@ class SWAGInference(object):
         self._swag_diagonal_mean = self._create_weight_copy()
         self._swag_diagonal_std = self._create_weight_copy()
         self._update_count = 0
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+    
+
+
         self.network = self.network.to(self.device)
         # Full SWAG
         # TODO(2): create attributes for SWAG-diagonal
