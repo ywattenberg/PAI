@@ -116,11 +116,11 @@ class SWAGInference(object):
         # TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_DIAGONAL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 90, 
+        swag_epochs: int = 30, 
         swag_learning_rate: float = 0.045,
-        swag_update_freq: int = 3,
+        swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 60, 
+        bma_samples: int = 30, 
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -355,7 +355,7 @@ class SWAGInference(object):
             current_sq_mean = self._swag_diagonal_std[name]
             current_cov = current_sq_mean - current_mean**2
             # print(current_std[(current_std < 0)])
-            current_cov = torch.abs(current_cov)
+            current_cov = current_cov.clamp(min=0)
             # (DONE)TODO(1): Sample parameter values for SWAG-diagonal
             assert current_mean.size() == param.size() and current_cov.size() == param.size()
 
