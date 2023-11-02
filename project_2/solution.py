@@ -114,13 +114,13 @@ class SWAGInference(object):
         model_dir: pathlib.Path,
         # (DONE)TODO(1): change inference_mode to InferenceMode.SWAG_DIAGONAL 
         # (DONE)TODO(2): change inference_mode to InferenceMode.SWAG_FULL
-        inference_mode: InferenceMode = InferenceMode.SWAG_DIAGONAL,
+        inference_mode: InferenceMode = InferenceMode.SWAG_FULL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 30, 
+        swag_epochs: int = 2, 
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 30, 
+        bma_samples: int = 2, 
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -167,8 +167,10 @@ class SWAGInference(object):
         #  Hint: check collections.deque
         if self.deviation_matrix_max_rank > self.swag_epochs:
             self.deviation_matrix_max_rank = self.swag_epochs
-        self._D_dach = [self._create_weight_copy for i in range(self.deviation_matrix_max_rank)]
-
+        self._D_dach = {}
+        for name, _ in self.network.named_parameters():
+            self._D_dach[name] = None
+        
         # Calibration, prediction, and other attributes
         # (LATER)TODO(2): create additional attributes, e.g., for calibration
         self._prediction_threshold = None  # this is an example, feel free to be creative
@@ -179,8 +181,9 @@ class SWAGInference(object):
         self._update_count = 0
 
         # (DONE)TODO(2): reset full SWAG statistics
-        self._D_dach = [self._create_weight_copy for i in range(self.deviation_matrix_max_rank)]        
-        return
+        self._D_dach = {}
+        for name, _ in self.network.named_parameters():
+            self._D_dach[name] = None
     
 
     def update_swag(self) -> None:
@@ -199,14 +202,17 @@ class SWAGInference(object):
             
             # for full SWAG
             if self.inference_mode == InferenceMode.SWAG_FULL:
-                params_diff[name] = param - self._swag_diagonal_mean[name]
+                if self._D_dach[name] is None:
+                    self._D_dach[name] = param.unsqueeze(0)
+                else:
+                    self._D_dach[name] = torch.cat([self._D_dach[name], (param - self._swag_diagonal_mean[name]).unsqueeze(0)], dim=0)
+                    if self._D_dach[name].shape[0] > self.deviation_matrix_max_rank:
+                        self._D_dach[name] = self._D_dach[name][1:]
         
 
         # Full SWAG
-        if self.inference_mode == InferenceMode.SWAG_FULL:
-            # TODO(2): update full SWAG attributes for weight `name` using `current_params` and `param`
-            self._D_dach.pop(0)
-            self._D_dach.append(params_diff)
+            # (DONE)TODO(2): update full SWAG attributes for weight `name` using `current_params` and `param`
+            
             
         self._update_count += 1
 
@@ -372,14 +378,21 @@ class SWAGInference(object):
 
             # Diagonal part
             sampled_param = current_mean + 1/np.sqrt(2) * torch.sqrt(current_cov) * torch.normal(0, torch.ones_like(current_mean)) # current_mean + current_std * z_1
-
+            
             # Full SWAG part
-            if self.inference_mode == InferenceMode.SWAG_FULL:
-                # TODO(2): Sample parameter values for full SWAG
+            if self.inference_mode == InferenceMode.SWAG_FULL:        
+                # (DONE)TODO(2): Sample parameter values for full SWAG
                 #  Hint: check collections.deque
                 normalizer = 1.0/np.sqrt(2*(self.deviation_matrix_max_rank-1))
-                sampled_param += torch.normal(0, normalizer* self._D_dach[0][name])
-            # Modify weight value in-place; directly changing self.network
+                # print(f"_D_dach[name].shape: {self._D_dach[name].shape}")
+                # print(f"normal shape: {torch.normal(0, torch.ones([self.deviation_matrix_max_rank])).shape}")
+                num_of_dims_to_expand = len(self._D_dach[name].shape) - self.deviation_matrix_max_rank
+                z_1 = torch.normal(0, torch.ones([self.deviation_matrix_max_rank]))
+                scaled_d = torch.sum(torch.stack([z_1[i]*self._D_dach[name][i] for i in range(self.deviation_matrix_max_rank)]), dim=0)
+                sampled_param += normalizer * scaled_d
+            #     print(f"Intermediate shape: {z_1}")
+            # print(f"param.data.shape: {param.data.shape}")
+            # print(f"sampled_param.shape: {sampled_param.shape}")
             param.data = sampled_param
 
         # (DONE)TODO(1): Don't forget to update batch normalization statistics using self._update_batchnorm()
@@ -406,7 +419,7 @@ class SWAGInference(object):
         # return max_likelihood_labels
 
         # A bit better: use a threshold to decide whether to return a label or "don't know" (label -1)
-        # TODO(2): implement a different decision rule if desired
+        # (LATER)TODO(2): implement a different decision rule if desired
         return torch.where(
             label_probabilities >= self._prediction_threshold,
             max_likelihood_labels,
@@ -641,10 +654,10 @@ class SWAGScheduler(torch.optim.lr_scheduler.LRScheduler):
 
         This method should return a single float: the new learning rate.
         """
-        # TODO(2): Implement a custom schedule if desired
+        # (LATER)TODO(2): Implement a custom schedule if desired
         return old_lr
 
-    # TODO(2): Add and store additional arguments if you decide to implement a custom scheduler
+    # (LATER)TODO(2): Add and store additional arguments if you decide to implement a custom scheduler
     def __init__(
         self,
         optimizer: torch.optim.Optimizer,
