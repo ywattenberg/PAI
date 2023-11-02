@@ -116,7 +116,7 @@ class SWAGInference(object):
         # TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_DIAGONAL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 1, 
+        swag_epochs: int = 30, 
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
@@ -157,7 +157,8 @@ class SWAGInference(object):
         self._swag_diagonal_mean = self._create_weight_copy()
         self._swag_diagonal_std = self._create_weight_copy()
         self._update_count = 0
-        self.use_cuda = torch.cuda.is_available()
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.network = self.network.to(self.device)
         # Full SWAG
         # TODO(2): create attributes for SWAG-diagonal
         #  Hint: check collections.deque
@@ -235,6 +236,8 @@ class SWAGInference(object):
                 average_accuracy = 0.0
                 num_samples_processed = 0
                 for batch_xs, batch_is_snow, batch_is_cloud, batch_ys in loader:
+                    batch_xs = batch_xs.to(self.device)
+                    batch_ys = batch_ys.to(self.device)
                     optimizer.zero_grad()
                     pred_ys = self.network(batch_xs)
                     batch_loss = loss(input=pred_ys, target=batch_ys)
@@ -308,7 +311,7 @@ class SWAGInference(object):
             # Update network weights
             # (DONE)TODO(1): Perform inference for all samples in `loader` using current model sample,
             # and add the predictions to per_model_sample_predictions
-            per_model_sample_predictions.append(torch.cat([self.network(batch_xs) for (batch_xs,) in loader]))
+            per_model_sample_predictions.append(torch.cat([self.network(batch_xs.to(self.device)) for (batch_xs,) in loader]))
         
         # batch_xs, = next(iter(loader))
         # print(f"batch size: {batch_xs.size()}")
@@ -330,7 +333,7 @@ class SWAGInference(object):
         #bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
         
         assert bma_probabilities.dim() == 2 and bma_probabilities.size(1) == 6  # N x C
-        return bma_probabilities
+        return bma_probabilities.to("cpu")
 
     def sample_parameters(self) -> None:
         """
@@ -347,13 +350,14 @@ class SWAGInference(object):
             # SWAG-diagonal part
             current_mean = self._swag_diagonal_mean[name]
             current_sq_mean = self._swag_diagonal_std[name]
-            current_std = current_sq_mean - current_mean**2
-
+            current_cov = current_sq_mean - current_mean**2
+            # print(current_std[(current_std < 0)])
+            current_cov = torch.abs(current_cov)
             # (DONE)TODO(1): Sample parameter values for SWAG-diagonal
-            assert current_mean.size() == param.size() and current_std.size() == param.size()
+            assert current_mean.size() == param.size() and current_cov.size() == param.size()
 
             # Diagonal part
-            sampled_param = torch.normal(current_mean, current_std) # current_mean + current_std * z_1
+            sampled_param = torch.normal(current_mean, torch.sqrt(current_cov)) # current_mean + current_std * z_1
 
             # Full SWAG part
             if self.inference_mode == InferenceMode.SWAG_FULL:
@@ -595,7 +599,7 @@ class SWAGInference(object):
 
         self.network.train()
         for (batch_xs,) in loader:
-            self.network(batch_xs)
+            self.network(batch_xs.to(self.device))
         self.network.eval()
 
         # Restore old `momentum` hyperparameter values
