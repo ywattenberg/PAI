@@ -231,9 +231,17 @@ class SWAGInference(object):
             nesterov=False,
             weight_decay=1e-4,
         )
+        
+        # optimizer = torch.optim.Adam(
+        #     self.network.parameters(),
+        #     lr = self.swag_learning_rate,
+        #     weight_decay=1e-4,
+        # )
+            
         loss = torch.nn.CrossEntropyLoss(
             reduction="mean",
         )
+        
         # (LATER)TODO(2): Update SWAGScheduler instantiation if you decided to implement a custom schedule.
         #  By default, this scheduler just keeps the initial learning rate given to `optimizer`.
         lr_scheduler = SWAGScheduler(
@@ -241,6 +249,22 @@ class SWAGInference(object):
             epochs=self.swag_epochs,
             steps_per_epoch=len(loader),
         )
+
+        # lr_scheduler = SWALR(optimizer, swa_lr=0.05)
+ 
+        # lr_scheduler = torch.optim.lr_scheduler.SequentialLR(
+        #     optimizer,
+        #     [
+        #         torch.optim.lr_scheduler.ConstantLR(optimizer, factor=1.0),
+        #         torch.optim.lr_scheduler.LinearLR(
+        #             optimizer,
+        #             start_factor=1.0,
+        #             end_factor=0.0,
+        #             total_iters=self.swag_epochs * len(loader),
+        #         ),
+        #     ],
+        #     milestones=[self.swag_epochs * len(loader)],
+        # )
 
         # (Done)TODO(1): Perform initialization for SWAG fitting
         self.reset_swag_statistics()
@@ -653,7 +677,16 @@ class SWAGScheduler(torch.optim.lr_scheduler.LRScheduler):
         This method should return a single float: the new learning rate.
         """
         # (LATER)TODO(2): Implement a custom schedule if desired
-        return old_lr
+        # print(f"lr scalar: {np.power((1 - current_epoch / self.epochs), 2)}")
+        t = (current_epoch) / self.epochs
+        lr_ratio = old_lr / 0.045
+        if t <= 0.5:
+            factor = 1.0
+        elif t <= 0.9:
+            factor = 1.0 - (1.0 - lr_ratio) * (t - 0.5) / 0.4
+        else:
+            factor = lr_ratio
+        return 0.045 * lr_ratio
 
     # (LATER)TODO(2): Add and store additional arguments if you decide to implement a custom scheduler
     def __init__(
