@@ -116,11 +116,11 @@ class SWAGInference(object):
         # (DONE)TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_FULL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 2, 
+        swag_epochs: int = 30, 
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 2, 
+        bma_samples: int = 30, 
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -174,7 +174,7 @@ class SWAGInference(object):
         
         # Calibration, prediction, and other attributes
         # (LATER)TODO(2): create additional attributes, e.g., for calibration
-        self._prediction_threshold = None  # this is an example, feel free to be creative
+        self._prediction_threshold = 2.0/3.0  # this is an example, feel free to be creative
 
     def reset_swag_statistics(self) -> None:
         self._swag_diagonal_mean = self._create_weight_copy()
@@ -193,7 +193,6 @@ class SWAGInference(object):
         """
         # Create a copy of the current network weights
         current_params = {name: param.detach() for name, param in self.network.named_parameters()}
-        params_diff = self._create_weight_copy()
             
         # SWAG-diagonal
         for name, param in current_params.items():
@@ -213,8 +212,6 @@ class SWAGInference(object):
 
         # Full SWAG
             # (DONE)TODO(2): update full SWAG attributes for weight `name` using `current_params` and `param`
-            
-            
         self._update_count += 1
 
     def fit_swag(self, loader: torch.utils.data.DataLoader) -> None:
@@ -332,7 +329,7 @@ class SWAGInference(object):
             # Update network weights
             # (DONE)TODO(1): Perform inference for all samples in `loader` using current model sample,
             # and add the predictions to per_model_sample_predictions
-            per_model_sample_predictions.append(torch.cat([self.network(batch_xs.to(self.device)) for (batch_xs,) in loader]))
+            per_model_sample_predictions.append(torch.cat([torch.softmax(self.network(batch_xs.to(self.device)), dim=-1) for (batch_xs,) in loader]))
         
         # batch_xs, = next(iter(loader))
         # print(f"batch size: {batch_xs.size()}")
@@ -350,7 +347,7 @@ class SWAGInference(object):
         bma_probabilities = torch.mean(torch.stack(per_model_sample_predictions), dim=0)
         # normalize probabilities per row to sum to 1
         # NUMERICAL PROPS: bma_probabilities = bma_probabilities / bma_probabilities.sum(dim=-1).unsqueeze(-1)
-        bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
+        #bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
         
         assert bma_probabilities.dim() == 2 and bma_probabilities.size(1) == 6  # N x C
         return bma_probabilities.to("cpu")
@@ -375,12 +372,14 @@ class SWAGInference(object):
             if (current_cov < 0).sum() > 0:
                 print(f"Negative STD in {name}")
                 current_cov = current_cov.clamp(min=0)
+            current_std = torch.sqrt(current_cov)
                 # current_cov = torch.abs(current_cov)
             # (DONE)TODO(1): Sample parameter values for SWAG-diagonal
-            assert current_mean.size() == param.size() and current_cov.size() == param.size()
+            assert current_mean.size() == param.size() and current_std.size() == param.size()
 
             # Diagonal part
-            sampled_param = current_mean + (1/np.sqrt(2)) * torch.sqrt(current_cov) * torch.normal(0, torch.ones_like(current_mean)) # current_mean + current_std * z_1
+            scaler = 1.0/np.sqrt(2) if self.inference_mode == InferenceMode.SWAG_FULL else 1.0
+            sampled_param = current_mean + scaler * current_std * torch.randn(param.size()).to(self.device) # current_mean + current_std * z_1
             
             # Full SWAG part
             if self.inference_mode == InferenceMode.SWAG_FULL:        
