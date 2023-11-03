@@ -389,7 +389,7 @@ class SWAGInference(object):
                 normalizer = 1.0/np.sqrt(2*(self.deviation_matrix_max_rank-1))
                 z_1 = torch.normal(0, torch.ones([self.deviation_matrix_max_rank])).to(self.device)
                 
-                scaled_d = torch.matmul(self._D_dach[name].permute(torch.arange(self._D_dach[name].ndim - 1, -1, -1)), z_1).permute(torch.arange(self._D_dach[name].ndim - 1, -1, -1)).to(self.device)
+                scaled_d = torch.permute(torch.matmul(torch.permute(self._D_dach[name], torch.arange(self._D_dach[name].ndim - 1, -1, -1).tolist()), z_1), torch.arange(self._D_dach[name].ndim - 2, -1, -1).tolist()).to(self.device)
                 
                 sampled_param += normalizer * scaled_d
             param.data = sampled_param
