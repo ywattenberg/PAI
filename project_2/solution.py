@@ -158,6 +158,7 @@ class SWAGInference(object):
         self._swag_diagonal_std = self._create_weight_copy()
         self._update_count = 0
         self.device = torch.device("cuda" if torch.cuda.is_available() else "mps" if torch.backends.mps.is_available() else "cpu")
+        # self.device = "cpu"
     
 
 
@@ -350,7 +351,6 @@ class SWAGInference(object):
         # normalize probabilities per row to sum to 1
         # NUMERICAL PROPS: bma_probabilities = bma_probabilities / bma_probabilities.sum(dim=-1).unsqueeze(-1)
         bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
-        #bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
         
         assert bma_probabilities.dim() == 2 and bma_probabilities.size(1) == 6  # N x C
         return bma_probabilities.to("cpu")
@@ -372,27 +372,26 @@ class SWAGInference(object):
             current_sq_mean = self._swag_diagonal_std[name]
             current_cov = current_sq_mean - current_mean**2
             # print(current_std[(current_std < 0)])
-            current_cov = current_cov.clamp(min=0)
+            if (current_cov < 0).sum() > 0:
+                print(f"Negative STD in {name}")
+                current_cov = current_cov.clamp(min=0)
+                # current_cov = torch.abs(current_cov)
             # (DONE)TODO(1): Sample parameter values for SWAG-diagonal
             assert current_mean.size() == param.size() and current_cov.size() == param.size()
 
             # Diagonal part
-            sampled_param = current_mean + 1/np.sqrt(2) * torch.sqrt(current_cov) * torch.normal(0, torch.ones_like(current_mean)) # current_mean + current_std * z_1
+            sampled_param = current_mean + (1/np.sqrt(2)) * torch.sqrt(current_cov) * torch.normal(0, torch.ones_like(current_mean)) # current_mean + current_std * z_1
             
             # Full SWAG part
             if self.inference_mode == InferenceMode.SWAG_FULL:        
                 # (DONE)TODO(2): Sample parameter values for full SWAG
                 #  Hint: check collections.deque
                 normalizer = 1.0/np.sqrt(2*(self.deviation_matrix_max_rank-1))
-                # print(f"_D_dach[name].shape: {self._D_dach[name].shape}")
-                # print(f"normal shape: {torch.normal(0, torch.ones([self.deviation_matrix_max_rank])).shape}")
-                num_of_dims_to_expand = len(self._D_dach[name].shape) - self.deviation_matrix_max_rank
-                z_1 = torch.normal(0, torch.ones([self.deviation_matrix_max_rank]))
-                scaled_d = torch.sum(torch.stack([z_1[i]*self._D_dach[name][i] for i in range(self.deviation_matrix_max_rank)]), dim=0)
+                z_1 = torch.normal(0, torch.ones([self.deviation_matrix_max_rank])).to(self.device)
+                
+                scaled_d = torch.matmul(self._D_dach[name].permute(torch.arange(self._D_dach[name].ndim - 1, -1, -1)), z_1).permute(torch.arange(self._D_dach[name].ndim - 1, -1, -1)).to(self.device)
+                
                 sampled_param += normalizer * scaled_d
-            #     print(f"Intermediate shape: {z_1}")
-            # print(f"param.data.shape: {param.data.shape}")
-            # print(f"sampled_param.shape: {sampled_param.shape}")
             param.data = sampled_param
 
         # (DONE)TODO(1): Don't forget to update batch normalization statistics using self._update_batchnorm()
