@@ -116,11 +116,11 @@ class SWAGInference(object):
         # (DONE)TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_FULL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 2, 
+        swag_epochs: int = 30, 
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 2, 
+        bma_samples: int = 30, 
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -192,7 +192,6 @@ class SWAGInference(object):
         """
         # Create a copy of the current network weights
         current_params = {name: param.detach() for name, param in self.network.named_parameters()}
-        params_diff = self._create_weight_copy()
             
         # SWAG-diagonal
         for name, param in current_params.items():
@@ -378,6 +377,7 @@ class SWAGInference(object):
 
             # Diagonal part
             sampled_param = current_mean + 1/np.sqrt(2) * torch.sqrt(current_cov) * torch.normal(0, torch.ones_like(current_mean)) # current_mean + current_std * z_1
+            #sampled_param = current_mean + torch.sqrt(current_cov) * torch.normal(0, torch.ones_like(current_mean))
             
             # Full SWAG part
             if self.inference_mode == InferenceMode.SWAG_FULL:        
@@ -448,7 +448,7 @@ class SWAGInference(object):
         """
 
         # MAP inference to obtain initial weights
-        PRETRAINED_WEIGHTS_FILE = self.model_dir / "map_weights.pt"
+        PRETRAINED_WEIGHTS_FILE = self.model_dir / "new_map_weights.pt"
         if USE_PRETRAINED_INIT:
             self.network.load_state_dict(torch.load(PRETRAINED_WEIGHTS_FILE))
             print("Loaded pretrained MAP weights from", PRETRAINED_WEIGHTS_FILE)
