@@ -116,11 +116,11 @@ class SWAGInference(object):
         # (DONE)TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_FULL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 30, 
+        swag_epochs: int = 60, 
         swag_learning_rate: float = 0.045,
-        swag_update_freq: int = 1,
-        deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 30, 
+        swag_update_freq: int = 2,
+        deviation_matrix_max_rank: int =20,
+        bma_samples: int = 60, 
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -174,7 +174,7 @@ class SWAGInference(object):
         
         # Calibration, prediction, and other attributes
         # (LATER)TODO(2): create additional attributes, e.g., for calibration
-        self._prediction_threshold = 2.0/3.0  # this is an example, feel free to be creative
+        self._prediction_threshold = 0 # this is an example, feel free to be creative
 
     def reset_swag_statistics(self) -> None:
         self._swag_diagonal_mean = self._create_weight_copy()
@@ -321,7 +321,7 @@ class SWAGInference(object):
 
         # TODO(1): pick a prediction threshold, either constant or adaptive.
         #  The provided value should suffice to pass the easy baseline.
-        self._prediction_threshold = 2.0 / 3.0
+        self._prediction_threshold = 0.6
 
         # (LATER)TODO(2): perform additional calibration if desired.
         #  Feel free to remove or change the prediction threshold.
@@ -679,14 +679,14 @@ class SWAGScheduler(torch.optim.lr_scheduler.LRScheduler):
         # (LATER)TODO(2): Implement a custom schedule if desired
         # print(f"lr scalar: {np.power((1 - current_epoch / self.epochs), 2)}")
         t = (current_epoch) / self.epochs
-        lr_ratio = old_lr / 0.045
+        lr_ratio = 0.01
         if t <= 0.5:
             factor = 1.0
         elif t <= 0.9:
             factor = 1.0 - (1.0 - lr_ratio) * (t - 0.5) / 0.4
         else:
             factor = lr_ratio
-        return 0.045 * lr_ratio
+        return factor * 0.045
 
     # (LATER)TODO(2): Add and store additional arguments if you decide to implement a custom scheduler
     def __init__(
