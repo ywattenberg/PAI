@@ -119,7 +119,7 @@ class SWAGInference(object):
         swag_epochs: int = 60, 
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 2,
-        deviation_matrix_max_rank: int =20,
+        deviation_matrix_max_rank: int = 20,
         bma_samples: int = 60, 
     ):
         """
@@ -174,7 +174,7 @@ class SWAGInference(object):
         
         # Calibration, prediction, and other attributes
         # (LATER)TODO(2): create additional attributes, e.g., for calibration
-        self._prediction_threshold = 0 # this is an example, feel free to be creative
+        self._prediction_threshold = 0.0 # this is an example, feel free to be creative
 
     def reset_swag_statistics(self) -> None:
         self._swag_diagonal_mean = self._create_weight_copy()
@@ -320,8 +320,21 @@ class SWAGInference(object):
             return
 
         # TODO(1): pick a prediction threshold, either constant or adaptive.
-        #  The provided value should suffice to pass the easy baseline.
-        self._prediction_threshold = 0.6
+        #  The provided value should suffice to pass the easy baseline.        
+        # pred_prob_all = self.predict_probabilities(xs)
+        # pred_prob_max, pred_ys_argmax = torch.max(pred_prob_all, dim=-1)
+        # pred_ys = self.predict_labels(pred_prob_all)
+        
+        # thresholds = [0.0] + list(torch.unique(pred_prob_max, sorted=True))
+        # costs = []
+        # for threshold in thresholds:
+        #     thresholded_ys = torch.where(pred_prob_max <= threshold, -1 * torch.ones_like(pred_ys), pred_ys)
+        #     costs.append(cost_function(thresholded_ys, ys).item())
+        # best_idx = np.argmin(costs)
+        
+        # self._prediction_threshold = thresholds[best_idx]
+        # print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
+        self._prediction_threshold = 0.66
 
         # (LATER)TODO(2): perform additional calibration if desired.
         #  Feel free to remove or change the prediction threshold.
