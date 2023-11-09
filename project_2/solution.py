@@ -11,7 +11,6 @@ import torch
 import torch.optim
 import torch.utils.data
 import tqdm
-# import ml_insights as mli
 from matplotlib import pyplot as plt
 from util import draw_reliability_diagram, cost_function, setup_seeds, calc_calibration_curve
 
@@ -89,10 +88,12 @@ class LogisticRegression(torch.nn.Module):
     def __init__(self, input_dim, output_dim):
          super(LogisticRegression, self).__init__()
          assert(input_dim == output_dim)
-         self.linear = torch.nn.Linear(input_dim, output_dim)     
+         self.linear = torch.nn.Linear(input_dim, 512)
+         self.relu = torch.nn.ReLU()
+         self.linear2 = torch.nn.Linear(512, output_dim)
          
     def forward(self, x):
-         outputs = torch.sigmoid(self.linear(x))
+         outputs = torch.sigmoid(self.linear2(self.relu(self.linear(x))))
          return outputs
 
 class InferenceMode(enum.Enum):
@@ -126,11 +127,12 @@ class SWAGInference(object):
         # (DONE)TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_FULL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 10, 
-        swag_learning_rate: float = 0.001974383549762636,
+        swag_epochs: int = 30, 
+        swag_learning_rate: float = 0.045,
         swag_update_freq: int = 1,
-        deviation_matrix_max_rank: int = 5,
-        bma_samples: int = 10,
+        deviation_matrix_max_rank: int = 15,
+        bma_samples: int = 30,
+        calibration_method = 'none'
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -151,6 +153,7 @@ class SWAGInference(object):
         self.deviation_matrix_max_rank = deviation_matrix_max_rank
         self.bma_samples = bma_samples
         self.calib_model = None
+        self.calibration_method = calibration_method
 
         # Network used to perform SWAG.
         # Note that all operations in this class modify this network IN-PLACE!
@@ -326,12 +329,14 @@ class SWAGInference(object):
         validation_data contains well-defined and ambiguous samples,
         where you can identify the latter by having label -1.
         """
+        import ml_insights as mli
+
         if torch.cuda.is_available():
             device = torch.device("cuda")
         else:
             device = torch.device("cpu")
 
-            
+
         if self.inference_mode == InferenceMode.MAP:
             # In MAP mode, simply predict argmax and do nothing else
             self._prediction_threshold = 0.0
@@ -340,70 +345,45 @@ class SWAGInference(object):
         # TODO(1): pick a prediction threshold, either constant or adaptive.
         #  The provided value should suffice to pass the easy baseline.  
         
-        # thresholds = [0.0] + list(torch.unique(pred_prob_max, sorted=True))
-        # costs = []
-        # for threshold in thresholds:
-        #     thresholded_ys = torch.where(pred_prob_max <= threshold, -1 * torch.ones_like(pred_ys), pred_ys)
-        #     costs.append(cost_function(thresholded_ys, ys).item())
-        # best_idx = np.argmin(costs)
+        
         xs, is_snow, is_cloud, ys = validation_data.tensors
 
         xs = xs[ys!=-1]
         ys = ys[ys!=-1]
 
-        print(f"size validation set: {xs.size()}")
-
-        # self.calibrator = None
         with torch.no_grad():
             pred = self.predict_probabilities(xs)
 
-        num_samples, num_classes = pred.size()          
-        self.calib_model = LogisticRegression(input_dim=num_classes, output_dim=num_classes).to(device)
 
-        epochs = 20
-        optimizer = torch.optim.Adam(
-            self.calib_model.parameters(),
-            lr = 0.001,
-            weight_decay=1e-4,
-        )
+        if (self.calibration_method == "spline"):
+            self.calib_model = mli.SplineCalib()
+            self.calib_model.fit(pred.to('cpu').numpy(), ys)
+            print("spline fitting done")
+        elif (self.calibration_method == "logistic"):
+            num_samples, num_classes = pred.size()          
+            self.calib_model = LogisticRegression(input_dim=num_classes, output_dim=num_classes).to(device)
 
-        loss_fn = torch.nn.CrossEntropyLoss()
+            epochs = 200
+            optimizer = torch.optim.Adam(
+                self.calib_model.parameters(),
+                lr = 0.001,
+                weight_decay=1e-4,
+            )
+            loss_fn = torch.nn.CrossEntropyLoss()
+            for _ in tqdm.trange(epochs, desc="Calibration Model"):
+                outputs = self.calib_model(pred.to(device))
 
-        for _ in tqdm.trange(epochs, desc="Calibration Model"):
-            outputs = self.calib_model(pred.to(device))
-
-            loss = loss_fn(outputs, ys.to(device))
-            
-            # Backward pass and optimization
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                loss = loss_fn(outputs, ys.to(device))
                 
-
-
-        # self.calibrator = IsotonicRegression()
-        # self.calibrator.fit(pred[ys != -1], ys[ys != -1])
-        
-        # pred_prob_all = self.predict_probabilities(xs)
-        # pred_ys = self.predict_labels(pred_prob_all)
-
-        # pred_prob_max, pred_ys_argmax = torch.max(pred_prob_all, dim=-1)
-        
-        # thresholds = [0.0] + list(torch.unique(pred_prob_max, sorted=True))
-        # costs = []
-        # for threshold in thresholds:
-        #     thresholded_ys = torch.where(pred_prob_max <= threshold, -1 * torch.ones_like(pred_ys), pred_ys)
-        #     costs.append(cost_function(thresholded_ys, ys).item())
-        # best_idx = np.argmin(costs)
-
-        self.threshold = 0.6287963390350342
-
-        
-        
-        # self._prediction_threshold = thresholds[best_idx]
-        # print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
-        # self._prediction_threshold = thresholds[best_idx]
-        # print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
+                # Backward pass and optimization
+                optimizer.zero_grad()
+                loss.backward()
+                optimizer.step()
+        else:
+            self.calib_model = None
+                    
+            
+        self.threshold = 0.66
 
 
         # (LATER)TODO(2): perform additional calibration if desired.
@@ -460,11 +440,18 @@ class SWAGInference(object):
         #bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
         
         assert bma_probabilities.dim() == 2 and bma_probabilities.size(1) == 6  # N x C
+        print(f"final_probs before: {torch.round(bma_probabilities[:20, :], decimals=3)}")
+
         if self.calib_model is not None:
             print("run")
             with torch.no_grad():
-                bma_probabilities = self.calib_model(bma_probabilities)
-            # bma_probabilities = torch.from_numpy(self.calib_model.predict(bma_probabilities.numpy()))
+
+                if self.calibration_method == 'spline':
+                    bma_probabilities = torch.from_numpy(self.calib_model.predict(bma_probabilities.to('cpu').numpy()))
+                elif self.calibration_method == 'logistic':
+                    bma_probabilities = torch.softmax(self.calib_model(bma_probabilities), dim=1)
+
+                print(f"final probs: {torch.round(bma_probabilities[:20, :], decimals=3)}")
 
         return bma_probabilities.to("cpu")
 
