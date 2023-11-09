@@ -338,6 +338,7 @@ class SWAGInference(object):
         # self._prediction_threshold = thresholds[best_idx]
         # print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
         self._prediction_threshold = thresholds[best_idx]
+        print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
 
         # (LATER)TODO(2): perform additional calibration if desired.
         #  Feel free to remove or change the prediction threshold.
