@@ -245,6 +245,7 @@ class SWAGInference(object):
         # (LATER)TODO(2): Update SWAGScheduler instantiation if you decided to implement a custom schedule.
         #  By default, this scheduler just keeps the initial learning rate given to `optimizer`.
         lr_scheduler = SWAGScheduler(
+            self.swag_learning_rate,
             optimizer,
             epochs=self.swag_epochs,
             steps_per_epoch=len(loader),
@@ -335,10 +336,10 @@ class SWAGInference(object):
         #     print(pred.shape)
         # self.calibrator = IsotonicRegression()
         # self.calibrator.fit(pred[ys != -1], ys[ys != -1])
-
+        
+        pred_prob_all = self.predict_probabilities(xs)
         pred_ys = self.predict_labels(pred_prob_all)
 
-        pred_prob_all = self.predict_probabilities(xs)
         pred_prob_max, pred_ys_argmax = torch.max(pred_prob_all, dim=-1)
         
         thresholds = [0.0] + list(torch.unique(pred_prob_max, sorted=True))
@@ -724,15 +725,17 @@ class SWAGScheduler(torch.optim.lr_scheduler.LRScheduler):
             factor = 1.0 - (1.0 - lr_ratio) * (t - 0.5) / 0.4
         else:
             factor = lr_ratio
-        return factor * 0.045
+        return factor * self._lr
 
     # (LATER)TODO(2): Add and store additional arguments if you decide to implement a custom scheduler
     def __init__(
         self,
+        lr: float,
         optimizer: torch.optim.Optimizer,
         epochs: int,
         steps_per_epoch: int,
     ):
+        self._lr = lr
         self.epochs = epochs
         self.steps_per_epoch = steps_per_epoch
         super().__init__(optimizer, last_epoch=-1, verbose=False)
