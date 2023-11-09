@@ -12,6 +12,7 @@ import torch.optim
 import torch.utils.data
 import tqdm
 from matplotlib import pyplot as plt
+
 from util import draw_reliability_diagram, cost_function, setup_seeds, calc_calibration_curve
 
 EXTENDED_EVALUATION = True
@@ -84,18 +85,6 @@ def main():
         evaluate(swag, dataset_val, EXTENDED_EVALUATION, output_dir)
 
 
-class LogisticRegression(torch.nn.Module):
-    def __init__(self, input_dim, output_dim):
-         super(LogisticRegression, self).__init__()
-         assert(input_dim == output_dim)
-         self.linear = torch.nn.Linear(input_dim, 512)
-         self.relu = torch.nn.ReLU()
-         self.linear2 = torch.nn.Linear(512, output_dim)
-         
-    def forward(self, x):
-         outputs = torch.sigmoid(self.linear2(self.relu(self.linear(x))))
-         return outputs
-
 class InferenceMode(enum.Enum):
     """
     Inference mode switch for your implementation.
@@ -132,7 +121,7 @@ class SWAGInference(object):
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
         bma_samples: int = 30,
-        calibration_method = 'none'
+        calibration_method = 'spline'
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -152,8 +141,8 @@ class SWAGInference(object):
         self.swag_update_freq = swag_update_freq
         self.deviation_matrix_max_rank = deviation_matrix_max_rank
         self.bma_samples = bma_samples
-        self.calib_model = None
         self.calibration_method = calibration_method
+        self.calib_model = None
 
         # Network used to perform SWAG.
         # Note that all operations in this class modify this network IN-PLACE!
@@ -259,7 +248,6 @@ class SWAGInference(object):
         # (LATER)TODO(2): Update SWAGScheduler instantiation if you decided to implement a custom schedule.
         #  By default, this scheduler just keeps the initial learning rate given to `optimizer`.
         lr_scheduler = SWAGScheduler(
-            self.swag_learning_rate,
             optimizer,
             epochs=self.swag_epochs,
             steps_per_epoch=len(loader),
@@ -329,6 +317,36 @@ class SWAGInference(object):
         validation_data contains well-defined and ambiguous samples,
         where you can identify the latter by having label -1.
         """
+        if self.inference_mode == InferenceMode.MAP:
+            # In MAP mode, simply predict argmax and do nothing else
+            self._prediction_threshold = 0.0
+            return
+
+        # TODO(1): pick a prediction threshold, either constant or adaptive.
+        #  The provided value should suffice to pass the easy baseline.        
+        # pred_prob_all = self.predict_probabilities(xs)
+        # pred_prob_max, pred_ys_argmax = torch.max(pred_prob_all, dim=-1)
+        # pred_ys = self.predict_labels(pred_prob_all)
+        
+        # thresholds = [0.0] + list(torch.unique(pred_prob_max, sorted=True))
+        # costs = []
+        # for threshold in thresholds:
+        #     thresholded_ys = torch.where(pred_prob_max <= threshold, -1 * torch.ones_like(pred_ys), pred_ys)
+        #     costs.append(cost_function(thresholded_ys, ys).item())
+        # best_idx = np.argmin(costs)
+        
+        # self._prediction_threshold = thresholds[best_idx]
+        # print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
+        self._prediction_threshold = 0.75
+
+        # (LATER)TODO(2): perform additional calibration if desired.
+        #  Feel free to remove or change the prediction threshold.
+        val_xs, val_is_snow, val_is_cloud, val_ys = validation_data.tensors
+        assert val_xs.size() == (140, 3, 60, 60)  # N x C x H x W
+        assert val_ys.size() == (140,)
+        assert val_is_snow.size() == (140,)
+        assert val_is_cloud.size() == (140,)
+
         import ml_insights as mli
 
         if torch.cuda.is_available():
@@ -336,66 +354,18 @@ class SWAGInference(object):
         else:
             device = torch.device("cpu")
 
-
-        if self.inference_mode == InferenceMode.MAP:
-            # In MAP mode, simply predict argmax and do nothing else
-            self._prediction_threshold = 0.0
-            return
-
-        # TODO(1): pick a prediction threshold, either constant or adaptive.
-        #  The provided value should suffice to pass the easy baseline.  
-        
-        
-        xs, is_snow, is_cloud, ys = validation_data.tensors
-
-        xs = xs[ys!=-1]
-        ys = ys[ys!=-1]
+        val_xs = val_xs[val_ys != -1]
+        val_ys = val_ys[val_ys != -1]
 
         with torch.no_grad():
-            pred = self.predict_probabilities(xs)
-
+            pred = self.predict_probabilities(val_xs)
 
         if (self.calibration_method == "spline"):
             self.calib_model = mli.SplineCalib()
-            self.calib_model.fit(pred.to('cpu').numpy(), ys)
+            self.calib_model.fit(pred.to('cpu').numpy(), val_ys)
             print("spline fitting done")
-        elif (self.calibration_method == "logistic"):
-            num_samples, num_classes = pred.size()          
-            self.calib_model = LogisticRegression(input_dim=num_classes, output_dim=num_classes).to(device)
-
-            epochs = 200
-            optimizer = torch.optim.Adam(
-                self.calib_model.parameters(),
-                lr = 0.001,
-                weight_decay=1e-4,
-            )
-            loss_fn = torch.nn.CrossEntropyLoss()
-            for _ in tqdm.trange(epochs, desc="Calibration Model"):
-                outputs = self.calib_model(pred.to(device))
-
-                loss = loss_fn(outputs, ys.to(device))
-                
-                # Backward pass and optimization
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
         else:
             self.calib_model = None
-                    
-            
-        self.threshold = 0.66
-
-
-        # (LATER)TODO(2): perform additional calibration if desired.
-        #  Feel free to remove or change the prediction threshold.
-        val_xs, val_is_snow, val_is_cloud, val_ys = validation_data.tensors
-
-        
-
-        assert val_xs.size() == (140, 3, 60, 60)  # N x C x H x W
-        assert val_ys.size() == (140,)
-        assert val_is_snow.size() == (140,)
-        assert val_is_cloud.size() == (140,)
 
     def predict_probabilities_swag(self, loader: torch.utils.data.DataLoader) -> torch.Tensor:
         """
@@ -440,19 +410,14 @@ class SWAGInference(object):
         #bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
         
         assert bma_probabilities.dim() == 2 and bma_probabilities.size(1) == 6  # N x C
-        print(f"final_probs before: {torch.round(bma_probabilities[:20, :], decimals=3)}")
+        print(f"final_probs before: {torch.round(bma_probabilities[:10, :], decimals=3)}")
 
         if self.calib_model is not None:
-            print("run")
-            with torch.no_grad():
-
-                if self.calibration_method == 'spline':
-                    bma_probabilities = torch.from_numpy(self.calib_model.predict(bma_probabilities.to('cpu').numpy()))
-                elif self.calibration_method == 'logistic':
-                    bma_probabilities = torch.softmax(self.calib_model(bma_probabilities), dim=1)
-
+            if self.calibration_method == 'spline':
+                bma_probabilities = torch.from_numpy(self.calib_model.predict(bma_probabilities.to('cpu').numpy()))
                 print(f"final probs: {torch.round(bma_probabilities[:20, :], decimals=3)}")
-
+      
+        
         return bma_probabilities.to("cpu")
 
     def sample_parameters(self) -> None:
@@ -765,17 +730,15 @@ class SWAGScheduler(torch.optim.lr_scheduler.LRScheduler):
             factor = 1.0 - (1.0 - lr_ratio) * (t - 0.5) / 0.4
         else:
             factor = lr_ratio
-        return factor * self._lr
+        return factor * 0.045
 
     # (LATER)TODO(2): Add and store additional arguments if you decide to implement a custom scheduler
     def __init__(
         self,
-        lr: float,
         optimizer: torch.optim.Optimizer,
         epochs: int,
         steps_per_epoch: int,
     ):
-        self._lr = lr
         self.epochs = epochs
         self.steps_per_epoch = steps_per_epoch
         super().__init__(optimizer, last_epoch=-1, verbose=False)
