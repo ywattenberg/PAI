@@ -320,10 +320,7 @@ class SWAGInference(object):
             return
 
         # TODO(1): pick a prediction threshold, either constant or adaptive.
-        #  The provided value should suffice to pass the easy baseline.        
-        # pred_prob_all = self.predict_probabilities(xs)
-        # pred_prob_max, pred_ys_argmax = torch.max(pred_prob_all, dim=-1)
-        # pred_ys = self.predict_labels(pred_prob_all)
+        #  The provided value should suffice to pass the easy baseline.  
         
         # thresholds = [0.0] + list(torch.unique(pred_prob_max, sorted=True))
         # costs = []
@@ -333,9 +330,23 @@ class SWAGInference(object):
         # best_idx = np.argmin(costs)
         self.calibrator = IsotonicRegression()
 
+        xs, is_snow, is_cloud, ys = validation_data.tensors
+        
+        pred_prob_all = self.predict_probabilities(xs)
+        pred_prob_max, pred_ys_argmax = torch.max(pred_prob_all, dim=-1)
+        pred_ys = self.predict_labels(pred_prob_all)
+        
+        thresholds = [0.0] + list(torch.unique(pred_prob_max, sorted=True))
+        costs = []
+        for threshold in thresholds:
+            thresholded_ys = torch.where(pred_prob_max <= threshold, -1 * torch.ones_like(pred_ys), pred_ys)
+            costs.append(cost_function(thresholded_ys, ys).item())
+        best_idx = np.argmin(costs)
+        
         # self._prediction_threshold = thresholds[best_idx]
         # print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
-        self._prediction_threshold = 0.66
+        self._prediction_threshold = thresholds[best_idx]
+        print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
 
 
         # (LATER)TODO(2): perform additional calibration if desired.
