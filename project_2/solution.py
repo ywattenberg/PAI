@@ -12,7 +12,7 @@ import torch.optim
 import torch.utils.data
 import tqdm
 from matplotlib import pyplot as plt
-
+from sklearn.isotonic import IsotonicRegression
 from util import draw_reliability_diagram, cost_function, setup_seeds, calc_calibration_curve
 
 EXTENDED_EVALUATION = True
@@ -331,14 +331,21 @@ class SWAGInference(object):
         #     thresholded_ys = torch.where(pred_prob_max <= threshold, -1 * torch.ones_like(pred_ys), pred_ys)
         #     costs.append(cost_function(thresholded_ys, ys).item())
         # best_idx = np.argmin(costs)
-        
+        self.calibrator = IsotonicRegression()
+
         # self._prediction_threshold = thresholds[best_idx]
         # print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
         self._prediction_threshold = 0.66
 
+
         # (LATER)TODO(2): perform additional calibration if desired.
         #  Feel free to remove or change the prediction threshold.
         val_xs, val_is_snow, val_is_cloud, val_ys = validation_data.tensors
+        with torch.no_grad():
+            pred = self.predict_probabilities(val_xs).numpy()
+        self.calibrator.fit(pred[val_ys != -1], val_ys[val_ys != -1])
+        
+
         assert val_xs.size() == (140, 3, 60, 60)  # N x C x H x W
         assert val_ys.size() == (140,)
         assert val_is_snow.size() == (140,)
@@ -387,6 +394,9 @@ class SWAGInference(object):
         #bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
         
         assert bma_probabilities.dim() == 2 and bma_probabilities.size(1) == 6  # N x C
+        if self.calibrator is not None:
+            bma_probabilities = torch.from_numpy(self.calibrator.predict(bma_probabilities.numpy()))
+
         return bma_probabilities.to("cpu")
 
     def sample_parameters(self) -> None:
