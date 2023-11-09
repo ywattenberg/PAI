@@ -116,10 +116,10 @@ class SWAGInference(object):
         # (DONE)TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_FULL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 60, 
+        swag_epochs: int = 10, 
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 2,
-        deviation_matrix_max_rank: int = 20,
+        deviation_matrix_max_rank: int = 5,
         bma_samples: int = 60, 
     ):
         """
@@ -328,13 +328,18 @@ class SWAGInference(object):
         #     thresholded_ys = torch.where(pred_prob_max <= threshold, -1 * torch.ones_like(pred_ys), pred_ys)
         #     costs.append(cost_function(thresholded_ys, ys).item())
         # best_idx = np.argmin(costs)
-        self.calibrator = IsotonicRegression()
-
         xs, is_snow, is_cloud, ys = validation_data.tensors
-        
+        # self.calibrator = None
+        # with torch.no_grad():
+        #     pred = self.predict_probabilities(xs)
+        #     print(pred.shape)
+        # self.calibrator = IsotonicRegression()
+        # self.calibrator.fit(pred[ys != -1], ys[ys != -1])
+
+        pred_ys = self.predict_labels(pred_prob_all)
+
         pred_prob_all = self.predict_probabilities(xs)
         pred_prob_max, pred_ys_argmax = torch.max(pred_prob_all, dim=-1)
-        pred_ys = self.predict_labels(pred_prob_all)
         
         thresholds = [0.0] + list(torch.unique(pred_prob_max, sorted=True))
         costs = []
@@ -352,9 +357,7 @@ class SWAGInference(object):
         # (LATER)TODO(2): perform additional calibration if desired.
         #  Feel free to remove or change the prediction threshold.
         val_xs, val_is_snow, val_is_cloud, val_ys = validation_data.tensors
-        with torch.no_grad():
-            pred = self.predict_probabilities(val_xs).numpy()
-        self.calibrator.fit(pred[val_ys != -1], val_ys[val_ys != -1])
+
         
 
         assert val_xs.size() == (140, 3, 60, 60)  # N x C x H x W
@@ -405,8 +408,9 @@ class SWAGInference(object):
         #bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
         
         assert bma_probabilities.dim() == 2 and bma_probabilities.size(1) == 6  # N x C
-        if self.calibrator is not None:
-            bma_probabilities = torch.from_numpy(self.calibrator.predict(bma_probabilities.numpy()))
+        # if self.calibrator is not None:
+        #     print("run")
+        #     bma_probabilities = torch.from_numpy(self.calibrator.predict(bma_probabilities.numpy()))
 
         return bma_probabilities.to("cpu")
 
