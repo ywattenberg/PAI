@@ -348,6 +348,7 @@ class SWAGInference(object):
         assert val_is_cloud.size() == (140,)
 
         import ml_insights as mli
+        from sklearn.linear_model import LogisticRegression
 
         if torch.cuda.is_available():
             device = torch.device("cuda")
@@ -364,6 +365,9 @@ class SWAGInference(object):
             self.calib_model = mli.SplineCalib()
             self.calib_model.fit(pred.to('cpu').numpy(), val_ys)
             print("spline fitting done")
+        elif self.calibration_method == "logistic":
+            self.calib_model = LogisticRegression()
+            self.calib_model.fit(pred.to('cpu').numpy(), val_ys)
         else:
             self.calib_model = None
 
