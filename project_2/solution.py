@@ -12,7 +12,7 @@ import torch.optim
 import torch.utils.data
 import tqdm
 from matplotlib import pyplot as plt
-from sklearn.isotonic import IsotonicRegression
+
 from util import draw_reliability_diagram, cost_function, setup_seeds, calc_calibration_curve
 
 EXTENDED_EVALUATION = True
@@ -116,11 +116,12 @@ class SWAGInference(object):
         # (DONE)TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_FULL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 60, 
+        swag_epochs: int = 30, 
         swag_learning_rate: float = 0.045,
-        swag_update_freq: int = 2,
-        deviation_matrix_max_rank: int = 20,
-        bma_samples: int = 60, 
+        swag_update_freq: int = 1,
+        deviation_matrix_max_rank: int = 15,
+        bma_samples: int = 30,
+        calibration_method = 'spline'
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -140,6 +141,8 @@ class SWAGInference(object):
         self.swag_update_freq = swag_update_freq
         self.deviation_matrix_max_rank = deviation_matrix_max_rank
         self.bma_samples = bma_samples
+        self.calibration_method = calibration_method
+        self.calib_model = None
 
         # Network used to perform SWAG.
         # Note that all operations in this class modify this network IN-PLACE!
@@ -320,7 +323,10 @@ class SWAGInference(object):
             return
 
         # TODO(1): pick a prediction threshold, either constant or adaptive.
-        #  The provided value should suffice to pass the easy baseline.  
+        #  The provided value should suffice to pass the easy baseline.        
+        # pred_prob_all = self.predict_probabilities(xs)
+        # pred_prob_max, pred_ys_argmax = torch.max(pred_prob_all, dim=-1)
+        # pred_ys = self.predict_labels(pred_prob_all)
         
         # thresholds = [0.0] + list(torch.unique(pred_prob_max, sorted=True))
         # costs = []
@@ -328,39 +334,42 @@ class SWAGInference(object):
         #     thresholded_ys = torch.where(pred_prob_max <= threshold, -1 * torch.ones_like(pred_ys), pred_ys)
         #     costs.append(cost_function(thresholded_ys, ys).item())
         # best_idx = np.argmin(costs)
-        self.calibrator = IsotonicRegression()
-
-        xs, is_snow, is_cloud, ys = validation_data.tensors
-        
-        pred_prob_all = self.predict_probabilities(xs)
-        pred_prob_max, pred_ys_argmax = torch.max(pred_prob_all, dim=-1)
-        pred_ys = self.predict_labels(pred_prob_all)
-        
-        thresholds = [0.0] + list(torch.unique(pred_prob_max, sorted=True))
-        costs = []
-        for threshold in thresholds:
-            thresholded_ys = torch.where(pred_prob_max <= threshold, -1 * torch.ones_like(pred_ys), pred_ys)
-            costs.append(cost_function(thresholded_ys, ys).item())
-        best_idx = np.argmin(costs)
         
         # self._prediction_threshold = thresholds[best_idx]
         # print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
-        self._prediction_threshold = thresholds[best_idx]
-        print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
-
+        self._prediction_threshold = 0.75
 
         # (LATER)TODO(2): perform additional calibration if desired.
         #  Feel free to remove or change the prediction threshold.
         val_xs, val_is_snow, val_is_cloud, val_ys = validation_data.tensors
-        with torch.no_grad():
-            pred = self.predict_probabilities(val_xs).numpy()
-        self.calibrator.fit(pred[val_ys != -1], val_ys[val_ys != -1])
-        
-
         assert val_xs.size() == (140, 3, 60, 60)  # N x C x H x W
         assert val_ys.size() == (140,)
         assert val_is_snow.size() == (140,)
         assert val_is_cloud.size() == (140,)
+
+        import ml_insights as mli
+        from sklearn.linear_model import LogisticRegression
+
+        if torch.cuda.is_available():
+            device = torch.device("cuda")
+        else:
+            device = torch.device("cpu")
+
+        val_xs = val_xs[val_ys != -1]
+        val_ys = val_ys[val_ys != -1]
+
+        with torch.no_grad():
+            pred = self.predict_probabilities(val_xs)
+
+        if (self.calibration_method == "spline"):
+            self.calib_model = mli.SplineCalib()
+            self.calib_model.fit(pred.to('cpu').numpy(), val_ys)
+            print("spline fitting done")
+        elif self.calibration_method == "logistic":
+            self.calib_model = LogisticRegression()
+            self.calib_model.fit(pred.to('cpu').numpy(), val_ys)
+        else:
+            self.calib_model = None
 
     def predict_probabilities_swag(self, loader: torch.utils.data.DataLoader) -> torch.Tensor:
         """
@@ -405,9 +414,14 @@ class SWAGInference(object):
         #bma_probabilities = torch.softmax(bma_probabilities, dim=-1)
         
         assert bma_probabilities.dim() == 2 and bma_probabilities.size(1) == 6  # N x C
-        if self.calibrator is not None:
-            bma_probabilities = torch.from_numpy(self.calibrator.predict(bma_probabilities.numpy()))
+        print(f"final_probs before: {torch.round(bma_probabilities[:10, :], decimals=3)}")
 
+        if self.calib_model is not None:
+            if self.calibration_method == 'spline':
+                bma_probabilities = torch.from_numpy(self.calib_model.predict(bma_probabilities.to('cpu').numpy()))
+                print(f"final probs: {torch.round(bma_probabilities[:20, :], decimals=3)}")
+      
+        
         return bma_probabilities.to("cpu")
 
     def sample_parameters(self) -> None:
