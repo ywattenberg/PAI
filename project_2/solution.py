@@ -120,12 +120,12 @@ class SWAGInference(object):
         # (DONE)TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_FULL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 2, 
+        swag_epochs: int = 30, 
         swag_learning_rate: float = 0.045,
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 2,
-        calibration_method = 'isotonic'
+        bma_samples: int = 30,
+        calibration_method = 'logistic'
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -154,7 +154,6 @@ class SWAGInference(object):
 
         # Store training dataset to recalculate batch normalization statistics during SWAG inference
         self.train_dataset = torch.utils.data.TensorDataset(train_xs)
-
         # SWAG-diagonal
         # (DONE)TODO(1): create attributes for SWAG-diagonal
         #  Hint: self._create_weight_copy() creates an all-zero copy of the weights
@@ -251,6 +250,7 @@ class SWAGInference(object):
         # (LATER)TODO(2): Update SWAGScheduler instantiation if you decided to implement a custom schedule.
         #  By default, this scheduler just keeps the initial learning rate given to `optimizer`.
         lr_scheduler = SWAGScheduler(
+            self.swag_learning_rate,
             optimizer,
             epochs=self.swag_epochs,
             steps_per_epoch=len(loader),
@@ -286,6 +286,7 @@ class SWAGInference(object):
                 for batch_xs, batch_is_snow, batch_is_cloud, batch_ys in loader:
                     batch_xs = batch_xs.to(self.device)
                     batch_ys = batch_ys.to(self.device)
+
                     optimizer.zero_grad()
                     pred_ys = self.network(batch_xs)
                     batch_loss = loss(input=pred_ys, target=batch_ys)
@@ -340,7 +341,7 @@ class SWAGInference(object):
         
         # self._prediction_threshold = thresholds[best_idx]
         # print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
-        self._prediction_threshold = 0.627
+        # self._prediction_threshold = 0.627
 
         # (LATER)TODO(2): perform additional calibration if desired.
         #  Feel free to remove or change the prediction threshold.
@@ -374,13 +375,15 @@ class SWAGInference(object):
             self.calib_model.fit(pred.to('cpu').numpy(), val_ys)
             print("spline fitting done")
         elif self.calibration_method == "logistic":
-            self.calib_model = LogisticRegression(C=0.1)
+            self.calib_model = LogisticRegression(C=0.8)
             self.calib_model.fit(pred.to('cpu').numpy(), val_ys)
         elif self.calibration_method == "isotonic":
             self.calib_model = CalibratedClassifierCV(method="isotonic")
             self.calib_model.fit(pred.to('cpu').numpy(), val_ys)
         else:
             self.calib_model = None
+
+        self._prediction_threshold = self.get_optimal_threshold(validation_data)
 
     def predict_probabilities_swag(self, loader: torch.utils.data.DataLoader) -> torch.Tensor:
         """
@@ -727,6 +730,7 @@ class SWAGInference(object):
 
         with torch.no_grad():
             pred_prob_all = self.predict_probabilities(val_xs)
+            pred_ys = self.predict_labels(pred_prob_all)
 
         pred_prob_max, pred_ys_argmax = torch.max(pred_prob_all, dim=-1)
 
@@ -734,9 +738,10 @@ class SWAGInference(object):
         costs = []
         for threshold in thresholds:
             thresholded_ys = torch.where(pred_prob_max <= threshold, -1 * torch.ones_like(pred_ys), pred_ys)
-            costs.append(cost_function(thresholded_ys, ys).item())
+            costs.append(cost_function(thresholded_ys, val_ys).item())
         best_idx = np.argmin(costs)
-        print(f"Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
+        print(f"Calibration Best cost {costs[best_idx]} at threshold {thresholds[best_idx]}")
+        return thresholds[best_idx]
 
 class SWAGScheduler(torch.optim.lr_scheduler.LRScheduler):
     """
@@ -767,15 +772,17 @@ class SWAGScheduler(torch.optim.lr_scheduler.LRScheduler):
             factor = 1.0 - (1.0 - lr_ratio) * (t - 0.5) / 0.4
         else:
             factor = lr_ratio
-        return factor * 0.045
+        return factor * self.lr
 
     # (LATER)TODO(2): Add and store additional arguments if you decide to implement a custom scheduler
     def __init__(
         self,
+        lr,
         optimizer: torch.optim.Optimizer,
         epochs: int,
         steps_per_epoch: int,
     ):
+        self.lr = lr
         self.epochs = epochs
         self.steps_per_epoch = steps_per_epoch
         super().__init__(optimizer, last_epoch=-1, verbose=False)
