@@ -2,7 +2,7 @@
 import numpy as np
 from scipy.optimize import fmin_l_bfgs_b
 # import additional ...
-
+import sklearn.gaussian_process as gp
 
 # global variables
 DOMAIN = np.array([[0, 10]])  # restrict \theta in [0, 10]
@@ -15,7 +15,17 @@ class BO_algo():
     def __init__(self):
         """Initializes the algorithm with a parameter configuration."""
         # TODO: Define all relevant class members for your BO algorithm here.
-        pass
+        self.k = SAFETY_THRESHOLD
+        sigma_f = 0.15
+        sigma_v = 0.0001
+        length_scale = [10, 1, 0.5] # Should be tuned
+        matern_smoothness_f = 2.5
+        matern_smoothness_v = 2.5
+        self.kernel_f = gp.kernels.Matern(length_scale=length_scale, nu=matern_smoothness_f)
+        self.kernel_v = gp.kernels.ConstantKernel()*gp.kernels.DotProduct() + gp.kernels.Matern(length_scale=length_scale[0], nu=matern_smoothness_v)
+        self.gp_f = gp.GaussianProcessRegressor(kernel=self.kernel_f, alpha=sigma_f**2, n_restarts_optimizer=10)
+        self.gp_v = gp.GaussianProcessRegressor(kernel=self.kernel_v, alpha=sigma_v**2, n_restarts_optimizer=10)
+        self.data = []
 
     def next_recommendation(self):
         """
@@ -31,7 +41,11 @@ class BO_algo():
         # In implementing this function, you may use
         # optimize_acquisition_function() defined below.
 
-        raise NotImplementedError
+        
+        if self.data == []:
+            return get_initial_safe_point()
+        else:
+            return self.optimize_acquisition_function()
 
     def optimize_acquisition_function(self):
         """Optimizes the acquisition function defined below (DO NOT MODIFY).
@@ -80,6 +94,7 @@ class BO_algo():
         x = np.atleast_2d(x)
         # TODO: Implement the acquisition function you want to optimize.
         raise NotImplementedError
+        
 
     def add_data_point(self, x: float, f: float, v: float):
         """
@@ -95,7 +110,11 @@ class BO_algo():
             SA constraint func
         """
         # TODO: Add the observed data {x, f, v} to your model.
-        raise NotImplementedError
+        # Add points to arrays then retrain models
+        self.data.append([x, f, v])
+        self.gp_f.fit(self.data[:, 0], self.data[:, 1])
+        self.gp_v.fit(self.data[:, 0], self.data[:, 2])
+
 
     def get_solution(self):
         """
@@ -106,8 +125,12 @@ class BO_algo():
         solution: float
             the optimal solution of the problem
         """
-        # TODO: Return your predicted safe optimum of f.
-        raise NotImplementedError
+        data = sorted(self.data, key=lambda x: x[1], reverse=True)
+        idx = 0
+        while data[idx][2] > self.k:
+            idx += 1
+        return data[idx][0]
+        
 
     def plot(self, plot_recommendation: bool = True):
         """Plot objective and constraint posterior for debugging (OPTIONAL).
