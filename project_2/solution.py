@@ -38,6 +38,9 @@ def main():
     #     "You can remove this exception for local testing, but be aware that any changes to the main() method"
     #     " are ignored when generating your submission file."
     # )
+    
+    INCLUDE_VAL_SET = False
+    WITHOUT_CLOUDS_AND_SNOW = False
 
     data_dir = pathlib.Path.cwd()
     model_dir = pathlib.Path.cwd()
@@ -49,7 +52,16 @@ def main():
     train_ys = torch.from_numpy(raw_train_meta["train_ys"])
     train_is_snow = torch.from_numpy(raw_train_meta["train_is_snow"])
     train_is_cloud = torch.from_numpy(raw_train_meta["train_is_cloud"])
-    dataset_train = torch.utils.data.TensorDataset(train_xs, train_is_snow, train_is_cloud, train_ys)
+    
+    if WITHOUT_CLOUDS_AND_SNOW:
+        train_xs = train_xs[train_is_cloud == False]
+        train_xs = train_xs[train_is_snow == False]
+        train_ys = train_ys[train_is_cloud == False]
+        train_ys = train_ys[train_is_snow == False]
+        
+        dataset_train = torch.utils.data.TensorDataset(train_xs, train_ys)
+    else:
+        dataset_train = torch.utils.data.TensorDataset(train_xs, train_is_snow, train_is_cloud, train_ys)
 
     samples = int(len(dataset_train) * 0.8)
     dataset_train, dataset_cali = torch.utils.data.random_split(dataset_train, [0.8, 0.2])
@@ -77,6 +89,10 @@ def main():
         model_dir=model_dir,
     )
     swag.fit(train_loader)
+    
+    if INCLUDE_VAL_SET:
+        dataset_cali = torch.utils.data.ConcatDataset([dataset_cali, dataset_val])
+    
     swag.calibrate(dataset_cali)
     
     # fork_rng ensures that the evaluation does not change the rng state.
