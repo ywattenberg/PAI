@@ -38,6 +38,9 @@ def main():
     #     "You can remove this exception for local testing, but be aware that any changes to the main() method"
     #     " are ignored when generating your submission file."
     # )
+    
+    INCLUDE_VAL_SET = False
+    WITHOUT_CLOUDS_AND_SNOW = False
 
     data_dir = pathlib.Path.cwd()
     model_dir = pathlib.Path.cwd()
@@ -49,10 +52,23 @@ def main():
     train_ys = torch.from_numpy(raw_train_meta["train_ys"])
     train_is_snow = torch.from_numpy(raw_train_meta["train_is_snow"])
     train_is_cloud = torch.from_numpy(raw_train_meta["train_is_cloud"])
-    dataset_train = torch.utils.data.TensorDataset(train_xs, train_is_snow, train_is_cloud, train_ys)
+    
+    if WITHOUT_CLOUDS_AND_SNOW:
+        train_xs = train_xs[train_is_cloud == False]
+        train_ys = train_ys[train_is_cloud == False]
+        train_is_snow = train_is_snow[train_is_cloud == False]
+        train_xs = train_xs[train_is_snow == False]
+        train_ys = train_ys[train_is_snow == False]
+        
+        print(f"size of train_xs: {train_xs.size()}")
+        print(f"size of train ys: {train_ys.size()}")
+        
+        dataset_train = torch.utils.data.TensorDataset(train_xs, train_ys)
+    else:
+        dataset_train = torch.utils.data.TensorDataset(train_xs, train_is_snow, train_is_cloud, train_ys)
 
     samples = int(len(dataset_train) * 0.8)
-    dataset_train, dataset_cali = torch.utils.data.random_split(dataset_train, [0.8, 0.2])
+    # dataset_train, dataset_cali = torch.utils.data.random_split(dataset_train, [0.8, 0.2])
 
     # Load validation data
     val_xs = torch.from_numpy(np.load(data_dir / "val_xs.npz")["val_xs"])
@@ -77,6 +93,10 @@ def main():
         model_dir=model_dir,
     )
     swag.fit(train_loader)
+    
+    if INCLUDE_VAL_SET:
+        dataset_cali = torch.utils.data.ConcatDataset([dataset_cali, dataset_val])
+    
     swag.calibrate(dataset_cali)
     
     # fork_rng ensures that the evaluation does not change the rng state.
@@ -125,7 +145,8 @@ class SWAGInference(object):
         swag_update_freq: int = 1,
         deviation_matrix_max_rank: int = 15,
         bma_samples: int = 30,
-        calibration_method = 'logistic'
+        calibration_method = 'logistic',
+        without = True
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -147,13 +168,16 @@ class SWAGInference(object):
         self.bma_samples = bma_samples
         self.calibration_method = calibration_method
         self.calib_model = None
+        self.without = without
 
         # Network used to perform SWAG.
         # Note that all operations in this class modify this network IN-PLACE!
         self.network = CNN(in_channels=3, out_classes=6)
 
         # Store training dataset to recalculate batch normalization statistics during SWAG inference
+        print(f"size of train_xs {train_xs.size()}")
         self.train_dataset = torch.utils.data.TensorDataset(train_xs)
+        
         # SWAG-diagonal
         # (DONE)TODO(1): create attributes for SWAG-diagonal
         #  Hint: self._create_weight_copy() creates an all-zero copy of the weights
@@ -355,7 +379,6 @@ class SWAGInference(object):
         assert val_is_snow.size() == (140,)
         assert val_is_cloud.size() == (140,)
 
-        import ml_insights as mli
         from sklearn.linear_model import LogisticRegression
         from sklearn.calibration import CalibratedClassifierCV
 
@@ -370,11 +393,8 @@ class SWAGInference(object):
         with torch.no_grad():
             pred = self.predict_probabilities(val_xs)
 
-        if (self.calibration_method == "spline"):
-            self.calib_model = mli.SplineCalib()
-            self.calib_model.fit(pred.to('cpu').numpy(), val_ys)
-            print("spline fitting done")
-        elif self.calibration_method == "logistic":
+        
+        if self.calibration_method == "logistic":
             self.calib_model = LogisticRegression(C=0.8)
             self.calib_model.fit(pred.to('cpu').numpy(), val_ys)
         elif self.calibration_method == "isotonic":
@@ -435,7 +455,8 @@ class SWAGInference(object):
                 bma_probabilities = torch.from_numpy(self.calib_model.predict(bma_probabilities.to('cpu').numpy()))
                 print(f"final probs: {torch.round(bma_probabilities[:20, :], decimals=3)}")
             elif self.calibration_method == 'logistic':
-                bma_probabilities = torch.from_numpy(self.calib_model.predict_proba(bma_probabilities.to('cpu').numpy()))
+                bma_probabilities_calib = torch.from_numpy(self.calib_model.predict_proba(bma_probabilities.to('cpu').numpy()))
+                bma_probabilities = torch.add(bma_probabilities, bma_probabilities_calib, alpha=1)
                 print(f"final probs: {torch.round(bma_probabilities[:20, :], decimals=3)}")
             elif self.calibration_method == 'isotonic':
                 bma_probabilities = torch.from_numpy(self.calib_model.predict_proba(bma_probabilities.to('cpu').numpy()))
@@ -727,6 +748,13 @@ class SWAGInference(object):
     def get_optimal_threshold(self, validation_data):
         
         val_xs, val_is_snow, val_is_cloud, val_ys = validation_data.tensors
+        
+        if (self.without):
+            val_xs = val_xs[val_is_cloud == False]
+            val_ys = val_ys[val_is_cloud == False]
+            val_is_snow = val_is_snow[val_is_cloud == False]
+            val_xs = val_xs[val_is_snow == False]
+            val_ys = val_ys[val_is_snow == False]
 
         with torch.no_grad():
             pred_prob_all = self.predict_probabilities(val_xs)
