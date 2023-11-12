@@ -140,13 +140,13 @@ class SWAGInference(object):
         # (DONE)TODO(2): change inference_mode to InferenceMode.SWAG_FULL
         inference_mode: InferenceMode = InferenceMode.SWAG_FULL,
         # TODO(2): optionally add/tweak hyperparameters
-        swag_epochs: int = 30, 
+        swag_epochs: int = 200, 
         swag_learning_rate: float = 0.045,
-        swag_update_freq: int = 1,
+        swag_update_freq: int = 4,
         deviation_matrix_max_rank: int = 15,
-        bma_samples: int = 30,
+        bma_samples: int = 100,
         calibration_method = 'logistic',
-        without = True
+        without = False
     ):
         """
         :param train_xs: Training images (for storage only)
@@ -395,7 +395,7 @@ class SWAGInference(object):
 
         
         if self.calibration_method == "logistic":
-            self.calib_model = LogisticRegression(C=0.8)
+            self.calib_model = LogisticRegression(C=1.2)
             self.calib_model.fit(pred.to('cpu').numpy(), val_ys)
         elif self.calibration_method == "isotonic":
             self.calib_model = CalibratedClassifierCV(method="isotonic")
@@ -403,7 +403,8 @@ class SWAGInference(object):
         else:
             self.calib_model = None
 
-        self._prediction_threshold = self.get_optimal_threshold(validation_data)
+        # self._prediction_threshold = self.get_optimal_threshold(validation_data)
+        self._prediction_threshold = 0.66
 
     def predict_probabilities_swag(self, loader: torch.utils.data.DataLoader) -> torch.Tensor:
         """
@@ -456,7 +457,8 @@ class SWAGInference(object):
                 print(f"final probs: {torch.round(bma_probabilities[:20, :], decimals=3)}")
             elif self.calibration_method == 'logistic':
                 bma_probabilities_calib = torch.from_numpy(self.calib_model.predict_proba(bma_probabilities.to('cpu').numpy()))
-                bma_probabilities = torch.add(bma_probabilities, bma_probabilities_calib, alpha=1)
+               # bma_probabilities = torch.add(bma_probabilities, bma_probabilities_calib, alpha=1)/2
+                bma_probabilities = bma_probabilities_calib
                 print(f"final probs: {torch.round(bma_probabilities[:20, :], decimals=3)}")
             elif self.calibration_method == 'isotonic':
                 bma_probabilities = torch.from_numpy(self.calib_model.predict_proba(bma_probabilities.to('cpu').numpy()))
@@ -531,11 +533,16 @@ class SWAGInference(object):
 
         # A bit better: use a threshold to decide whether to return a label or "don't know" (label -1)
         # (LATER)TODO(2): implement a different decision rule if desired
-        return torch.where(
+
+        predicted_labels = torch.where(
             label_probabilities >= self._prediction_threshold,
             max_likelihood_labels,
             torch.ones_like(max_likelihood_labels) * -1,
         )
+        
+        print(f"number not classified samples: {torch.sum(predicted_labels == -1)}")
+        return predicted_labels        
+        
 
     def _create_weight_copy(self) -> typing.Dict[str, torch.Tensor]:
         """Create an all-zero copy of the network weights as a dictionary that maps name -> weight"""
