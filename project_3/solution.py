@@ -3,7 +3,7 @@ import numpy as np
 from scipy.optimize import fmin_l_bfgs_b
 # import additional ...
 import sklearn.gaussian_process as gp
-
+from scipy.stats import norm
 # global variables
 DOMAIN = np.array([[0, 10]])  # restrict \theta in [0, 10]
 SAFETY_THRESHOLD = 4  # threshold, upper bound of SA
@@ -21,11 +21,11 @@ class BO_algo():
         length_scale = [10, 1, 0.5] # Should be tuned
         matern_smoothness_f = 2.5
         matern_smoothness_v = 2.5
-        self.kernel_f = gp.kernels.Matern(length_scale=length_scale, nu=matern_smoothness_f)
-        self.kernel_v = gp.kernels.ConstantKernel()*gp.kernels.DotProduct() + gp.kernels.Matern(length_scale=length_scale[0], nu=matern_smoothness_v)
+        self.kernel_f = gp.kernels.Matern(length_scale=length_scale, nu=matern_smoothness_f) + gp.kernels.WhiteKernel(noise_level=0.15)
+        self.kernel_v = gp.kernels.ConstantKernel()*gp.kernels.DotProduct() + gp.kernels.Matern(length_scale=length_scale[0], nu=matern_smoothness_v) + gp.kernels.WhiteKernel(noise_level=0.0001)
         self.gp_f = gp.GaussianProcessRegressor(kernel=self.kernel_f, alpha=sigma_f**2, n_restarts_optimizer=10)
         self.gp_v = gp.GaussianProcessRegressor(kernel=self.kernel_v, alpha=sigma_v**2, n_restarts_optimizer=10)
-        self.data = []
+        self.data = np.empty((0, 3))
 
     def next_recommendation(self):
         """
@@ -42,10 +42,11 @@ class BO_algo():
         # optimize_acquisition_function() defined below.
 
         
-        if self.data == []:
+        if len(self.data) == 0:
             return get_initial_safe_point()
         else:
             return self.optimize_acquisition_function()
+        
 
     def optimize_acquisition_function(self):
         """Optimizes the acquisition function defined below (DO NOT MODIFY).
@@ -93,8 +94,16 @@ class BO_algo():
         """
         x = np.atleast_2d(x)
         # TODO: Implement the acquisition function you want to optimize.
-        raise NotImplementedError
-        
+        # Calculate the expected improvement 
+        # EI(x) = E[max(0, f(x) - f(x_best))]
+        # Get x* = argmax_x f(x)
+        x_best = self.get_solution()
+        # Get mu(x) and sigma(x) from the GP
+        mu_f, sigma_f = self.gp_f.predict(x, return_std=True)
+        z = (mu_f - x_best) / sigma_f
+        # Calculate the expected improvement
+        af_value = (mu_f - x_best) * norm.cdf(z) + sigma_f * norm.pdf(z)
+        return af_value
 
     def add_data_point(self, x: float, f: float, v: float):
         """
@@ -111,8 +120,9 @@ class BO_algo():
         """
         # TODO: Add the observed data {x, f, v} to your model.
         # Add points to arrays then retrain models
-        self.data.append([x, f, v])
-        self.gp_f.fit(self.data[:, 0], self.data[:, 1])
+        self.data = np.vstack((self.data, [[x, f, v]]))
+        print(self.data[:, 0].reshape(-1, 1))
+        self.gp_f.fit(self.data[:, 0].reshape(1, -1), self.data[:, 1])
         self.gp_v.fit(self.data[:, 0], self.data[:, 2])
 
 
@@ -125,11 +135,12 @@ class BO_algo():
         solution: float
             the optimal solution of the problem
         """
-        data = sorted(self.data, key=lambda x: x[1], reverse=True)
+        pred = np.argsort(self.data[:, 1])
+        self.data = self.data[pred]
         idx = 0
-        while data[idx][2] > self.k:
+        while self.data[idx][2] > self.k:
             idx += 1
-        return data[idx][0]
+        return self.data[idx][0]
         
 
     def plot(self, plot_recommendation: bool = True):
