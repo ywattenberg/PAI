@@ -21,11 +21,14 @@ class BO_algo():
         length_scale = [10, 1, 0.5] # Should be tuned
         matern_smoothness_f = 2.5
         matern_smoothness_v = 2.5
-        self.kernel_f = gp.kernels.Matern(length_scale=length_scale, nu=matern_smoothness_f) + gp.kernels.WhiteKernel(noise_level=0.15)
-        self.kernel_v = gp.kernels.ConstantKernel()*gp.kernels.DotProduct() + gp.kernels.Matern(length_scale=length_scale[0], nu=matern_smoothness_v) + gp.kernels.WhiteKernel(noise_level=0.0001)
+        self.kernel_f = gp.kernels.Matern(length_scale=length_scale[0], nu=matern_smoothness_f)
+        self.kernel_v = gp.kernels.ConstantKernel()*gp.kernels.DotProduct() + gp.kernels.Matern(length_scale=length_scale[0], nu=matern_smoothness_v)
         self.gp_f = gp.GaussianProcessRegressor(kernel=self.kernel_f, alpha=sigma_f**2, n_restarts_optimizer=10)
         self.gp_v = gp.GaussianProcessRegressor(kernel=self.kernel_v, alpha=sigma_v**2, n_restarts_optimizer=10)
-        self.data = np.empty((0, 3))
+        self.data_x = np.empty(shape=(1,1))
+        self.data_v = np.empty(shape=(1,1))
+        self.data_f = np.empty(shape=(1,1))
+        
 
     def next_recommendation(self):
         """
@@ -42,10 +45,10 @@ class BO_algo():
         # optimize_acquisition_function() defined below.
 
         
-        if len(self.data) == 0:
-            return get_initial_safe_point()
+        if len(self.data_x) == 0:
+            return np.expand_dims( np.array([get_initial_safe_point()]), axis=0)
         else:
-            return self.optimize_acquisition_function()
+            return np.expand_dims(np.array([self.optimize_acquisition_function()]), axis=0)
         
 
     def optimize_acquisition_function(self):
@@ -103,6 +106,7 @@ class BO_algo():
         z = (mu_f - x_best) / sigma_f
         # Calculate the expected improvement
         af_value = (mu_f - x_best) * norm.cdf(z) + sigma_f * norm.pdf(z)
+        # print(af_value)
         return af_value
 
     def add_data_point(self, x: float, f: float, v: float):
@@ -120,10 +124,11 @@ class BO_algo():
         """
         # TODO: Add the observed data {x, f, v} to your model.
         # Add points to arrays then retrain models
-        self.data = np.vstack((self.data, [[x, f, v]]))
-        print(self.data[:, 0].reshape(-1, 1))
-        self.gp_f.fit(self.data[:, 0].reshape(1, -1), self.data[:, 1])
-        self.gp_v.fit(self.data[:, 0], self.data[:, 2])
+        self.data_x = np.concatenate([self.data_x, [[x]]])
+        self.data_v = np.concatenate([self.data_v, [[v]]])
+        self.data_f = np.concatenate([self.data_f, [[f]]])
+        self.gp_f.fit(self.data_x, self.data_f)
+        self.gp_v.fit(self.data_x, self.data_v)
 
 
     def get_solution(self):
@@ -135,12 +140,12 @@ class BO_algo():
         solution: float
             the optimal solution of the problem
         """
-        pred = np.argsort(self.data[:, 1])
-        self.data = self.data[pred]
+        pred = np.argsort(self.data_x[:, 1])
+        self.data_x = self.data_x[pred]
         idx = 0
-        while self.data[idx][2] > self.k:
+        while self.data_x[idx][2] > self.k:
             idx += 1
-        return self.data[idx][0]
+        return self.data_x[idx][0]
         
 
     def plot(self, plot_recommendation: bool = True):
@@ -204,13 +209,14 @@ def main():
         x = agent.next_recommendation()
 
         # Check for valid shape
+        print(x)
         assert x.shape == (1, DOMAIN.shape[0]), \
             f"The function next recommendation must return a numpy array of " \
             f"shape (1, {DOMAIN.shape[0]})"
 
         # Obtain objective and constraint observation
-        obj_val = f(x) + np.randn()
-        cost_val = v(x) + np.randn()
+        obj_val = f(x) + np.random.randn()
+        cost_val = v(x) + np.random.randn()
         agent.add_data_point(x, obj_val, cost_val)
 
     # Validate solution
