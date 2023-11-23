@@ -4,6 +4,8 @@ from scipy.optimize import fmin_l_bfgs_b
 # import additional ...
 import sklearn.gaussian_process as gp
 from scipy.stats import norm
+import matplotlib.pyplot as plt
+
 # global variables
 DOMAIN = np.array([[0, 10]])  # restrict \theta in [0, 10]
 SAFETY_THRESHOLD = 4  # threshold, upper bound of SA
@@ -18,16 +20,14 @@ class BO_algo():
         self.k = SAFETY_THRESHOLD
         sigma_f = 0.15
         sigma_v = 0.0001
-        length_scale = [10, 1, 0.5] # Should be tuned
-        matern_smoothness_f = 2.5
-        matern_smoothness_v = 2.5
-        self.kernel_f = gp.kernels.Matern(length_scale=length_scale[0], nu=matern_smoothness_f)
-        self.kernel_v = gp.kernels.ConstantKernel()*gp.kernels.DotProduct() + gp.kernels.Matern(length_scale=length_scale[0], nu=matern_smoothness_v)
+
+        self.kernel_f = gp.kernels.Matern(nu=2.5)
+        self.kernel_v = gp.kernels.DotProduct() + gp.kernels.Matern(nu=2.5) * gp.kernels.ConstantKernel(4)
         self.gp_f = gp.GaussianProcessRegressor(kernel=self.kernel_f, alpha=sigma_f**2, n_restarts_optimizer=10)
         self.gp_v = gp.GaussianProcessRegressor(kernel=self.kernel_v, alpha=sigma_v**2, n_restarts_optimizer=10)
-        self.data_x = np.empty(shape=(1,1))
-        self.data_v = np.empty(shape=(1,1))
-        self.data_f = np.empty(shape=(1,1))
+        self.data_x = np.array([]).reshape(-1, DOMAIN.shape[0])
+        self.data_f = np.array([]).reshape(-1, DOMAIN.shape[0])
+        self.data_v = np.array([]).reshape(-1, DOMAIN.shape[0])
         
 
     def next_recommendation(self):
@@ -43,13 +43,10 @@ class BO_algo():
         # using functions f and v.
         # In implementing this function, you may use
         # optimize_acquisition_function() defined below.
-
-        
-        if len(self.data_x) == 0:
-            return np.expand_dims( np.array([get_initial_safe_point()]), axis=0)
+        if self.data_x.shape[0] == 0:
+            return get_initial_safe_point()
         else:
-            return np.expand_dims(np.array([self.optimize_acquisition_function()]), axis=0)
-        
+            return np.atleast_2d(self.optimize_acquisition_function())
 
     def optimize_acquisition_function(self):
         """Optimizes the acquisition function defined below (DO NOT MODIFY).
@@ -81,6 +78,19 @@ class BO_algo():
 
         return x_opt
 
+    def expected_improvement(self, x):
+        mu, sigma = self.gp_f.predict(x.reshape(-1, DOMAIN.shape[0]), return_std=True)
+        all_f = self.gp_f.predict(self.data_x, return_std=False)
+        max_f = np.max(all_f)
+        improv = mu - max_f
+       
+        return improv * norm.cdf(improv / sigma) + sigma * norm.pdf(improv / sigma)
+
+    def expected_constrained(self, x):
+            mu, sigma = self.gp_v.predict(x.reshape(-1, DOMAIN.shape[0]), return_std=True)
+            expected = self.k - mu
+            return expected * norm.cdf(expected / sigma) + sigma * norm.pdf(expected / sigma)
+
     def acquisition_function(self, x: np.ndarray):
         """Compute the acquisition function for x.
 
@@ -97,17 +107,37 @@ class BO_algo():
         """
         x = np.atleast_2d(x)
         # TODO: Implement the acquisition function you want to optimize.
-        # Calculate the expected improvement 
-        # EI(x) = E[max(0, f(x) - f(x_best))]
-        # Get x* = argmax_x f(x)
-        x_best = self.get_solution()
-        # Get mu(x) and sigma(x) from the GP
-        mu_f, sigma_f = self.gp_f.predict(x, return_std=True)
-        z = (mu_f - x_best) / sigma_f
-        # Calculate the expected improvement
-        af_value = (mu_f - x_best) * norm.cdf(z) + sigma_f * norm.pdf(z)
+        # # Calculate the expected improvement 
+        # # EI(x) = E[max(0, f(x) - f(x_best))]
+        # # Get x* = argmax_x f(x)
+        # x_best = self.get_solution()
+        # # Get mu(x) and sigma(x) from the GP
+        # mu_f, sigma_f = self.gp_f.predict(x, return_std=True)
+        # z = (mu_f - x_best) / sigma_f
+        # # Calculate the expected improvement
+        # af_value = (mu_f - x_best) * norm.cdf(z) + sigma_f * norm.pdf(z)
         # print(af_value)
-        return af_value
+
+        #EI
+        # t = np.array(self.data_f.max())
+        # c_mean, c_std = self.gp_v.predict(x, return_std=True)
+        # prop_constraint = norm.cdf((self.k - c_mean) / c_std)
+        
+        # f_mean, f_std = self.gp_f.predict(x, return_std=True)
+        # z_x = (f_mean - t - 0.1) / f_std
+
+        # ei_x = f_std * (z_x * norm.cdf(z_x) + norm.pdf(z_x))
+
+        # return prop_constraint * ei_x
+
+        # UCB
+        mu_f, sigma_f = self.gp_f.predict(x, return_std=True)
+        res = mu_f + 0.01 * sigma_f
+
+        c_mean, c_std = self.gp_v.predict(x, return_std=True)
+        prop_constraint = norm.cdf((self.k - c_mean) / c_std)
+        #print(f"prop_constraint: {prop_constraint}, res: {res}")
+        return prop_constraint * res
 
     def add_data_point(self, x: float, f: float, v: float):
         """
@@ -123,13 +153,11 @@ class BO_algo():
             SA constraint func
         """
         # TODO: Add the observed data {x, f, v} to your model.
-        # Add points to arrays then retrain models
-        self.data_x = np.concatenate([self.data_x, [[x]]])
-        self.data_v = np.concatenate([self.data_v, [[v]]])
-        self.data_f = np.concatenate([self.data_f, [[f]]])
+        self.data_x = np.vstack([self.data_x, x])
+        self.data_v = np.vstack([self.data_v, v])
+        self.data_f = np.vstack([self.data_f, f])
         self.gp_f.fit(self.data_x, self.data_f)
         self.gp_v.fit(self.data_x, self.data_v)
-
 
     def get_solution(self):
         """
@@ -140,13 +168,9 @@ class BO_algo():
         solution: float
             the optimal solution of the problem
         """
-        pred = np.argsort(self.data_x[:, 1])
-        self.data_x = self.data_x[pred]
-        idx = 0
-        while self.data_x[idx][2] > self.k:
-            idx += 1
-        return self.data_x[idx][0]
-        
+        # TODO: Return your predicted safe optimum of f.
+        pred = self.data_v < self.k
+        return self.data_x[np.argmax(self.data_f[pred])]
 
     def plot(self, plot_recommendation: bool = True):
         """Plot objective and constraint posterior for debugging (OPTIONAL).
@@ -156,12 +180,15 @@ class BO_algo():
         plot_recommendation: bool
             Plots the recommended point if True.
         """
-        pass
+        if plot_recommendation:
+            x = self.next_recommendation()
+            plt.plot(x, self.acquisition_function(x), 'ro', label='Recommendation')
 
 
 # ---
 # TOY PROBLEM. To check your code works as expected (ignored by checker).
 # ---
+
 
 def check_in_domain(x: float):
     """Validate input"""
@@ -209,7 +236,6 @@ def main():
         x = agent.next_recommendation()
 
         # Check for valid shape
-        print(x)
         assert x.shape == (1, DOMAIN.shape[0]), \
             f"The function next recommendation must return a numpy array of " \
             f"shape (1, {DOMAIN.shape[0]})"
