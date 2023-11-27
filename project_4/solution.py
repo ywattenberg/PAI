@@ -23,10 +23,33 @@ class NeuralNetwork(nn.Module):
         # TODO: Implement this function which should define a neural network 
         # with a variable number of hidden layers and hidden units.
         # Here you should define layers which your network will use.
+        self.input = nn.Linear(input_dim, hidden_size)
+        self.hidden = []
+        for i in range(hidden_layers):
+            self.hidden.append(nn.Linear(hidden_size, hidden_size))
+        self.output = nn.Linear(hidden_size, output_dim)
+        self.activation_fn = nn.ReLU()
+        if activation == 'tanh':
+            self.activation_fn = nn.Tanh()
+        elif activation == 'sigmoid':
+            self.activation_fn = nn.Sigmoid()
+        elif activation == 'leaky_relu':
+            self.activation_fn = nn.LeakyReLU()
+        elif activation == 'relu':
+            self.activation_fn = nn.ReLU()
+        else:
+            raise NotImplementedError
+        
 
     def forward(self, s: torch.Tensor) -> torch.Tensor:
         # TODO: Implement the forward pass for the neural network you have defined.
-        pass
+        x = self.input(s)
+        x = self.activation_fn(x)
+        for layer in self.hidden:
+            x = layer(x)
+            x = self.activation_fn(x)
+        x = self.output(x)
+        return x
     
 class Actor:
     def __init__(self,hidden_size: int, hidden_layers: int, actor_lr: float,
@@ -49,7 +72,8 @@ class Actor:
         '''
         # TODO: Implement this function which sets up the actor network. 
         # Take a look at the NeuralNetwork class in utils.py. 
-        pass
+        self.network = NeuralNetwork(self.state_dim, self.action_dim, self.hidden_size, self.hidden_layers, 'relu')
+        self.network.to(self.device)
 
     def clamp_log_std(self, log_std: torch.Tensor) -> torch.Tensor:
         '''
@@ -95,7 +119,8 @@ class Critic:
     def setup_critic(self):
         # TODO: Implement this function which sets up the critic(s). Take a look at the NeuralNetwork 
         # class in utils.py. Note that you can have MULTIPLE critic networks in this class.
-        pass
+        self.network = NeuralNetwork(self.state_dim + self.action_dim, 1, self.hidden_size, self.hidden_layers, 'relu')
+        self.network.to(self.device)
 
 class TrainableParameter:
     '''
