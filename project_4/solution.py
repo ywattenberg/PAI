@@ -44,7 +44,7 @@ class NeuralNetwork(nn.Module):
             self.hidden.append(nn.Linear(hidden_size, hidden_size))
             self.hidden.append(self.activation_fn)
         self.hidden = nn.Sequential(*self.hidden)
-        self.add_module('hidden', self.hidden)
+        self.add_module('hidden_layers', self.hidden)
            
         self.output = nn.Linear(hidden_size, output_dim)
         self._weight_init()
@@ -53,7 +53,7 @@ class NeuralNetwork(nn.Module):
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
-                nn.init.constant_(m.bias, 0.1)
+                nn.init.constant_(m.bias, 0.0)
 
     def forward(self, s: torch.Tensor) -> torch.Tensor:
         # TODO: Implement the forward pass for the neural network you have defined.
@@ -84,7 +84,9 @@ class Actor:
         '''
         # TODO: Implement this function which sets up the actor network. 
         # Take a look at the NeuralNetwork class in utils.py. 
-        self.network = NeuralNetwork(self.state_dim, 2*self.action_dim, self.hidden_size, self.hidden_layers, 'relu')
+        self.network = NeuralNetwork(self.state_dim, self.hidden_size, self.hidden_size, self.hidden_layers-1, 'relu')
+        self.mean = nn.Linear(self.hidden_size, self.action_dim)
+        self.log_std = nn.Linear(self.hidden_size, self.action_dim)
         self.network.to(self.device)
         self.optimizer = optim.Adam(self.network.parameters(), lr=self.actor_lr)
 
@@ -115,7 +117,7 @@ class Actor:
         # If working with stochastic policies, make sure that its log_std are clamped 
         # using the clamp_log_std function.
         out = self.network(state)
-        mean, log_std = out[:,:self.action_dim], out[:,self.action_dim:]
+        mean, log_std = self.mean(out), self.log_std(out)
         # print(f"mean shape: {mean.shape}, log_std shape: {log_std.shape}")
         c_log_std = self.clamp_log_std(log_std)
         
@@ -126,8 +128,7 @@ class Actor:
             actions = normal.rsample()
         
         action = torch.tanh(actions)
-        log_prob = normal.log_prob(actions)
-        log_prob -= torch.log(1 - action.pow(2) + 1e-6)
+        log_prob = normal.log_prob(actions) - torch.log(1 - action.pow(2) + 1e-6)
         log_prob = log_prob.sum(1, keepdim=True)
         # print(f"{action.shape}, {log_prob.shape}, input shape: {state.shape}")
 
@@ -139,7 +140,7 @@ class Actor:
 class Critic:
     def __init__(self, hidden_size: int, 
                  hidden_layers: int, critic_lr: int, state_dim: int = 3, 
-                    action_dim: int = 1,device: torch.device = torch.device('cpu')):
+                    action_dim: int = 1, device: torch.device = torch.device('cpu')):
         super(Critic, self).__init__()
         self.hidden_size = hidden_size
         self.hidden_layers = hidden_layers
@@ -171,7 +172,7 @@ class Critic:
             action = action.unsqueeze(0)
 
         input = torch.cat([state, action], dim=1)
-        return torch.cat([self.critic_1(input), self.critic_2(input)], dim=1)
+        return self.critic_1(input), self.critic_2(input)
 
         
 
@@ -204,9 +205,8 @@ class Agent:
         self.max_buffer_size = 100000
 
         ###
-        self.gamma = 0.95
-        self.tau = 1
-        self.target_update_interval = 100
+        self.gamma = 0.99
+        self.tau = 0.005
         self.lr = 3e-4
         ###
 
@@ -221,11 +221,12 @@ class Agent:
     def setup_agent(self):
         # TODO: Setup off-policy agent with policy and critic classes. 
         # Feel free to instantiate any other parameters you feel you might need.
-        self.target_entropy = -1*self.action_dim
+        self.target_entropy = torch.tensor(-1*self.action_dim).to(self.device)
         self.log_entropy_coef = torch.zeros(self.action_dim).to(self.device).requires_grad_(True)
-
-        self.entropy_optimizer = optim.Adam([self.log_entropy_coef], lr=self.lr)
         
+        self.entropy_optimizer = optim.Adam([self.log_entropy_coef], lr=self.lr)
+
+        #self.log_entropy_coef = torch.tensor(self.target_entropy)
 
         self.policy = Actor(256, 2, self.lr, self.state_dim, self.action_dim, self.device)
         self.critic = Critic(256, 2, self.lr, self.state_dim, self.action_dim, self.device)
@@ -234,10 +235,6 @@ class Agent:
         self.critic_target_update(self.critic.critic_1, self.critic_target.critic_1, self.tau, False)
         self.critic_target_update(self.critic.critic_2, self.critic_target.critic_2, self.tau, False)
 
-        # Set eval mode for critic target networks
-        self.critic_target.critic_1.eval()
-        self.critic_target.critic_2.eval()
-
         # Set up lr scheduler for all optimizers
         self.lr_scheduler = []
         self.lr_scheduler.append(torch.optim.lr_scheduler.StepLR(self.policy.optimizer, step_size=100, gamma=0.99))
@@ -245,8 +242,6 @@ class Agent:
         self.lr_scheduler.append(torch.optim.lr_scheduler.StepLR(self.entropy_optimizer, step_size=100, gamma=0.99))
 
         self.updates = 0
-
-        
 
 
     def get_action(self, s: np.ndarray, train: bool) -> np.ndarray:
@@ -258,7 +253,7 @@ class Agent:
         """
 
         state = torch.tensor(s, dtype=torch.float32).to(self.device)
-        action, _ = self.policy.get_action_and_log_prob(state, deterministic=False)
+        action, _ = self.policy.get_action_and_log_prob(state, deterministic=not train)
         action = action.squeeze(0).cpu().detach().numpy()
         
         assert action.shape == (1,), 'Incorrect action shape.'
@@ -307,32 +302,35 @@ class Agent:
         batch = self.memory.sample(self.batch_size)
         s_batch, a_batch, r_batch, s_prime_batch = batch
 
-        entropy_coef = torch.exp(self.log_entropy_coef)
         with torch.no_grad():
             next_actions, next_log_probs = self.policy.get_action_and_log_prob(s_prime_batch, False)
-            next_q = self.critic_target.get_q_values(s_prime_batch, next_actions)
-            next_q = torch.min(next_q, dim=1, keepdim=True)[0] - entropy_coef* next_log_probs
+            next_q_t_1, next_q_t_2 = self.critic_target.get_q_values(s_prime_batch, next_actions)
+            next_q = torch.min(next_q_t_1, next_q_t_2) - self.log_entropy_coef.exp()* next_log_probs
             next_q_value = r_batch + self.gamma * next_q
-        q = self.critic.get_q_values(s_batch, a_batch)
-        critic_loss = 0.5 * (torch.nn.functional.mse_loss(q[:,0], next_q_value.detach()) + torch.nn.functional.mse_loss(q[:,1], next_q_value.detach()))
-        self.run_gradient_update_step(self.critic, critic_loss)
+        q1, q2 = self.critic.get_q_values(s_batch, a_batch)
+        critic_loss = (torch.nn.functional.mse_loss(q1, next_q_value) + torch.nn.functional.mse_loss(q2, next_q_value))
+        
+        self.critic.optimizer.zero_grad()
+        critic_loss.backward()
+        self.critic.optimizer.step()
 
-        actions, log_probs = self.policy.get_action_and_log_prob(s_batch, False)
-        q = self.critic.get_q_values(s_batch, actions)
-        min_q, _ = torch.min(q, dim=1, keepdim=True)
-        actor_loss = (entropy_coef * log_probs - min_q).mean()
-        self.run_gradient_update_step(self.policy, actor_loss)
+        action, log_probs = self.policy.get_action_and_log_prob(s_batch, False)
+        q1, q2 = self.critic.get_q_values(s_batch, action)
+        min_q = torch.min(q1, q2)
+        actor_loss = (self.log_entropy_coef.exp() * log_probs - min_q).mean()
+
+        self.policy.optimizer.zero_grad()
+        actor_loss.backward()
+        self.policy.optimizer.step()
 
         entropy_coef_loss = -(self.log_entropy_coef * (log_probs + self.target_entropy).detach()).mean()
+
         self.entropy_optimizer.zero_grad()
         entropy_coef_loss.backward()
         self.entropy_optimizer.step()
 
-
-
-        if self.updates % self.target_update_interval == 0:
-            self.critic_target_update(self.critic.critic_1, self.critic_target.critic_1, self.tau, True)
-            self.critic_target_update(self.critic.critic_2, self.critic_target.critic_2, self.tau, True)
+        self.critic_target_update(self.critic.critic_1, self.critic_target.critic_1, self.tau, True)
+        self.critic_target_update(self.critic.critic_2, self.critic_target.critic_2, self.tau, True)
 
         self.updates += 1
 
