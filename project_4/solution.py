@@ -126,8 +126,9 @@ class Actor:
             actions = normal.rsample()
         
         action = torch.tanh(actions)
-        #log_prob = normal.log_prob(actions)
-        log_prob = torch.log(1 - action.pow(2) + 1e-6)
+        log_prob = normal.log_prob(actions)
+        log_prob -= torch.log(1 - action.pow(2) + 1e-6)
+        log_prob = log_prob.sum(1, keepdim=True)
         # print(f"{action.shape}, {log_prob.shape}, input shape: {state.shape}")
 
         assert action.shape == (state.shape[0], self.action_dim) and \
@@ -204,8 +205,8 @@ class Agent:
 
         ###
         self.gamma = 0.95
-        self.tau = 0.005
-        self.target_update_interval = 5
+        self.tau = 1
+        self.target_update_interval = 100
         self.lr = 3e-4
         ###
 
@@ -257,7 +258,7 @@ class Agent:
         """
 
         state = torch.tensor(s, dtype=torch.float32).to(self.device)
-        action, _ = self.policy.get_action_and_log_prob(state, deterministic=not train)
+        action, _ = self.policy.get_action_and_log_prob(state, deterministic=False)
         action = action.squeeze(0).cpu().detach().numpy()
         
         assert action.shape == (1,), 'Incorrect action shape.'
@@ -431,7 +432,7 @@ if __name__ == '__main__':
 
     # You may set the save_video param to output the video of one of the evalution episodes, or 
     # you can disable console printing during training and testing by setting verbose to False.
-    save_video = False
+    save_video = True
     verbose = True
 
     agent = Agent()
