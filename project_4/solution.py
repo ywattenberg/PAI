@@ -12,7 +12,6 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 
-
 class NeuralNetwork(nn.Module):
     '''
     This class implements a neural network with a variable number of hidden layers and hidden units.
@@ -62,6 +61,35 @@ class NeuralNetwork(nn.Module):
         x = self.hidden(x)
         x = self.output(x)
         return x
+    
+
+class GSDE:
+    def __init__(self, hidden_dim, log_std_init=-3.0, action_dim: int = 1, batch_size=200, device: torch.device = torch.device('cpu')):
+        self.hidden_dim = hidden_dim
+        self.log_std_init = log_std_init
+        self.action_dim = action_dim
+        self.device = device
+        self.batch_size = batch_size
+        self.setup_gsde()
+
+    def setup_gsde(self):
+        self.mean = nn.Linear(self.hidden_dim, self.action_dim).to(self.device)
+        self.log_std = torch.ones(self.hidden_dim, self.action_dim)
+        self.log_std = nn.Parameter(self.log_std * self.log_std_init).to(self.device).requires_grad_(True)
+        self.reset_noise()
+
+    
+    def get_std(self):
+        return self.log_std.exp()
+    
+    def reset_noise(self):
+        std = self.get_std()
+        self.w_dist = Normal(torch.zeros_like(std), std)
+        self.exploration_noise = self.w_dist.rsample()
+        self.batch_exploration_noise = self.w_dist.rsample((self.batch_size,))
+
+    def get_action_and_params(self, latent: torch.Tensor):
+        return self.mean(latent), self.log_std, latent # mu, log_std, sde
     
 class Actor:
     def __init__(self,hidden_size: int, hidden_layers: int, actor_lr: float,
@@ -196,7 +224,7 @@ class TrainableParameter:
 
 
 class Agent:
-    def __init__(self):
+    def __init__(self, gamma: float = 0.99, tau: float = 0.005, lr: float = 3e-4, lr_step_size: int = 100, lr_gamma: float = 0.99):
         # Environment variables. You don't need to change this.
         self.state_dim = 3  # [cos(theta), sin(theta), theta_dot]
         self.action_dim = 1  # [torque] in[-1,1]
@@ -205,9 +233,11 @@ class Agent:
         self.max_buffer_size = 100000
 
         ###
-        self.gamma = 0.99
-        self.tau = 0.005
-        self.lr = 3e-4
+        self.gamma = gamma
+        self.tau = tau
+        self.lr = lr
+        self.lr_step_size = lr_step_size
+        self.lr_gamma = lr_gamma
         ###
 
         # If your PC possesses a GPU, you should be able to use it for training, 
@@ -215,6 +245,7 @@ class Agent:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         print("Using device: {}".format(self.device))
         self.memory = ReplayBuffer(self.min_buffer_size, self.max_buffer_size, self.device)
+
         
         self.setup_agent()
 
@@ -237,9 +268,9 @@ class Agent:
 
         # Set up lr scheduler for all optimizers
         self.lr_scheduler = []
-        self.lr_scheduler.append(torch.optim.lr_scheduler.StepLR(self.policy.optimizer, step_size=100, gamma=0.99))
-        self.lr_scheduler.append(torch.optim.lr_scheduler.StepLR(self.critic.optimizer, step_size=100, gamma=0.99))
-        self.lr_scheduler.append(torch.optim.lr_scheduler.StepLR(self.entropy_optimizer, step_size=100, gamma=0.99))
+        self.lr_scheduler.append(torch.optim.lr_scheduler.StepLR(self.policy.optimizer, step_size=self.lr_step_size, gamma=self.lr_gamma))
+        self.lr_scheduler.append(torch.optim.lr_scheduler.StepLR(self.critic.optimizer, step_size=self.lr_step_size, gamma=self.lr_gamma))
+        self.lr_scheduler.append(torch.optim.lr_scheduler.StepLR(self.entropy_optimizer, step_size=self.lr_step_size, gamma=self.lr_gamma))
 
         self.updates = 0
 
