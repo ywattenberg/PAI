@@ -62,34 +62,83 @@ class NeuralNetwork(nn.Module):
         x = self.output(x)
         return x
     
-
+# self,hidden_size: int, hidden_layers: int, actor_lr: float, state_dim: int = 3, action_dim: int = 1, device: torch.device = torch.device('cpu')
 class GSDE:
-    def __init__(self, hidden_dim, log_std_init=-3.0, action_dim: int = 1, batch_size=200, device: torch.device = torch.device('cpu')):
-        self.hidden_dim = hidden_dim
+    def __init__( self, hidden_size: int, hidden_layers: int, actor_lr: float, state_dim: int = 3, action_dim: int = 1, device: torch.device = torch.device('cpu'), log_std_init=-3.0,  batch_size=200):
+        self.hidden_dim = hidden_size
         self.log_std_init = log_std_init
         self.action_dim = action_dim
         self.device = device
         self.batch_size = batch_size
+        self.hidden_layers = hidden_layers
+        self.actor_lr = actor_lr
+        self.state_dim = state_dim
         self.setup_gsde()
 
     def setup_gsde(self):
+        self.feature_net = NeuralNetwork(self.state_dim, self.hidden_dim, self.hidden_layers, 2, 'relu').to(self.device)
         self.mean = nn.Linear(self.hidden_dim, self.action_dim).to(self.device)
-        self.log_std = torch.ones(self.hidden_dim, self.action_dim)
-        self.log_std = nn.Parameter(self.log_std * self.log_std_init).to(self.device).requires_grad_(True)
+        self.log_std_net = torch.ones(self.hidden_dim, self.action_dim).to(self.device)
+        self.log_std_net = nn.Parameter(self.log_std_net * self.log_std_init, requires_grad=True)
         self.reset_noise()
-
+        self.optimizer = optim.Adam(list(self.feature_net.parameters()) + list(self.mean.parameters()) + [self.log_std_net], lr=self.actor_lr)
     
     def get_std(self):
-        return self.log_std.exp()
-    
+        return self.log_std_net.exp()
+
     def reset_noise(self):
         std = self.get_std()
         self.w_dist = Normal(torch.zeros_like(std), std)
         self.exploration_noise = self.w_dist.rsample()
         self.batch_exploration_noise = self.w_dist.rsample((self.batch_size,))
 
-    def get_action_and_params(self, latent: torch.Tensor):
-        return self.mean(latent), self.log_std, latent # mu, log_std, sde
+    def get_action_and_params(self, state: torch.Tensor):
+        latent = self.feature_net(state)
+        return self.mean(latent), self.log_std_net, latent # mu, log_std, sde
+    
+    
+    def get_noise(self, latent_sde):
+        if len(latent_sde) == 1 or len(latent_sde) != len(self.batch_exploration_noise):
+            return torch.mm(latent_sde, self.exploration_noise)
+        
+        latent_sde = latent_sde.unsqueeze(dim=1)
+        # (batch_size, 1, n_actions)
+        noise = torch.bmm(latent_sde, self.batch_exploration_noise)
+        return noise.squeeze(dim=1)
+
+    def get_action_and_log_prob(self, state, deterministic):
+        actions, log_std, latent = self.get_action_and_params(state)
+        latent_sde = latent
+        print(f"latent shape: {latent.shape}")
+        print(f"actions shape: {actions.shape}")
+        variance = torch.mm(latent**2, self.get_std()**2) + 1e-6
+        distribution = Normal(actions, variance.sqrt())
+
+        if deterministic:
+            actions = distribution.mean
+            action = torch.tanh(actions)
+        else:
+            noise = self.get_noise(latent_sde)
+            actions = distribution.mean + noise
+            action = torch.tanh(actions)
+
+        g_actions = self.inv(actions)
+        log_prop = self.w_dist.log_prob(g_actions) 
+        if len(log_prop.shape) > 1:
+            log_prop = log_prop.sum(dim=1)
+        else:
+            log_prop = log_prop.sum()
+        
+        log_prop -= torch.sum(torch.log(1-torch.tanh(actions) + 1e-6), dim=1)
+        return actions, log_prop
+
+    @staticmethod
+    def inv(x):
+        return torch.log(x.exp() - 1) - torch.log(x.exp() + 1)
+    
+    @staticmethod
+    def log_prop_corr(x):
+        return torch.log(1 - torch.tanh(x) + 1e-6)
     
 class Actor:
     def __init__(self,hidden_size: int, hidden_layers: int, actor_lr: float,
@@ -112,11 +161,12 @@ class Actor:
         '''
         # TODO: Implement this function which sets up the actor network. 
         # Take a look at the NeuralNetwork class in utils.py. 
-        self.network = NeuralNetwork(self.state_dim, self.hidden_size, self.hidden_size, self.hidden_layers-1, 'relu')
-        self.mean = nn.Linear(self.hidden_size, self.action_dim)
-        self.log_std = nn.Linear(self.hidden_size, self.action_dim)
-        self.network.to(self.device)
+        self.network = NeuralNetwork(self.state_dim, self.hidden_size, self.hidden_size, self.hidden_layers-1, 'relu').to(self.device)
+        self.mean = nn.Linear(self.hidden_size, self.action_dim).to(self.device)
+        self.log_std = nn.Linear(self.hidden_size, self.action_dim).to(self.device)
         self.optimizer = optim.Adam(self.network.parameters(), lr=self.actor_lr)
+        nn.init.xavier_uniform_(self.mean.weight)
+        nn.init.xavier_uniform_(self.log_std.weight)
 
     def clamp_log_std(self, log_std: torch.Tensor) -> torch.Tensor:
         '''
@@ -138,7 +188,7 @@ class Actor:
         '''
         if state.dim() == 1:
             state = state.unsqueeze(0)
-        action, log_prob = torch.zeros(state.shape[0]), torch.ones(state.shape[0])
+        action, log_prob = torch.zeros(state.shape[0]).to(self.device), torch.ones(state.shape[0]).to(self.device)
 
 
         # TODO: Implement this function which returns an action and its log probability.
@@ -222,9 +272,9 @@ class TrainableParameter:
     def get_log_param(self) -> torch.Tensor:
         return self.log_param
 
-
+# 'gamma': 0.9961269343474698, 'tau': 0.11289778101781192, 'lr': 0.007530678254384954, 'lr_step_size': 775, 'lr_gamma': 0.1720254528433003}
 class Agent:
-    def __init__(self, gamma: float = 0.99, tau: float = 0.005, lr: float = 3e-4, lr_step_size: int = 100, lr_gamma: float = 0.99):
+    def __init__(self, gamma: float = 0.996, tau: float = 0.113, lr: float = 0.00753, lr_step_size: int = 775, lr_gamma: float = 0.172):
         # Environment variables. You don't need to change this.
         self.state_dim = 3  # [cos(theta), sin(theta), theta_dot]
         self.action_dim = 1  # [torque] in[-1,1]
@@ -259,7 +309,7 @@ class Agent:
 
         #self.log_entropy_coef = torch.tensor(self.target_entropy)
 
-        self.policy = Actor(256, 2, self.lr, self.state_dim, self.action_dim, self.device)
+        self.policy = GSDE(256, 2, self.lr, self.state_dim, self.action_dim, self.device)
         self.critic = Critic(256, 2, self.lr, self.state_dim, self.action_dim, self.device)
         self.critic_target = Critic(256, 2, 0, self.state_dim, self.action_dim, self.device)
 
@@ -364,6 +414,10 @@ class Agent:
         self.critic_target_update(self.critic.critic_2, self.critic_target.critic_2, self.tau, True)
 
         self.updates += 1
+
+        # Update learning rate
+        # for lr_scheduler in self.lr_scheduler:
+        #     lr_scheduler.step()
 
 
         # actions, log_probs = self.policy.get_action_and_log_prob(s_batch)
