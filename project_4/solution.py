@@ -78,7 +78,7 @@ class GSDE:
     def setup_gsde(self):
         self.feature_net = NeuralNetwork(self.state_dim, self.hidden_dim, self.hidden_layers, 2, 'relu').to(self.device)
         self.mean = nn.Linear(self.hidden_dim, self.action_dim).to(self.device)
-        self.log_std_net = torch.ones(self.hidden_dim, self.action_dim).to(self.device)
+        self.log_std_net = torch.ones(self.hidden_dim).to(self.device)
         self.log_std_net = nn.Parameter(self.log_std_net * self.log_std_init, requires_grad=True)
         self.reset_noise()
         self.optimizer = optim.Adam(list(self.feature_net.parameters()) + list(self.mean.parameters()) + [self.log_std_net], lr=self.actor_lr)
@@ -99,46 +99,46 @@ class GSDE:
     
     def get_noise(self, latent_sde):
         if len(latent_sde) == 1 or len(latent_sde) != len(self.batch_exploration_noise):
-            return torch.mm(latent_sde, self.exploration_noise)
-        
+            return torch.dot(latent_sde, self.exploration_noise)
         latent_sde = latent_sde.unsqueeze(dim=1)
         # (batch_size, 1, n_actions)
-        noise = torch.bmm(latent_sde, self.batch_exploration_noise)
-        return noise.squeeze(dim=1)
+        noise = (latent_sde * self.batch_exploration_noise).sum(dim=-1)
+        return noise
 
     def get_action_and_log_prob(self, state, deterministic):
         actions, log_std, latent = self.get_action_and_params(state)
-        latent_sde = latent
-        print(f"latent shape: {latent.shape}")
-        print(f"actions shape: {actions.shape}")
-        variance = torch.mm(latent**2, self.get_std()**2) + 1e-6
+
+        variance = (latent**2).dot(self.get_std()**2) + 1e-6
         distribution = Normal(actions, variance.sqrt())
 
         if deterministic:
             actions = distribution.mean
             action = torch.tanh(actions)
         else:
-            noise = self.get_noise(latent_sde)
+            noise = self.get_noise(latent)
             actions = distribution.mean + noise
             action = torch.tanh(actions)
-
-        g_actions = self.inv(actions)
+        g_actions = self.inv(action)
+        
         log_prop = self.w_dist.log_prob(g_actions) 
         if len(log_prop.shape) > 1:
             log_prop = log_prop.sum(dim=1)
         else:
             log_prop = log_prop.sum()
-        
-        log_prop -= torch.sum(torch.log(1-torch.tanh(actions) + 1e-6), dim=1)
-        return actions, log_prop
+
+        if len(action.shape) == 1:
+            action = action.unsqueeze(0)
+        log_prop -= torch.sum(torch.log(1-torch.tanh(g_actions) + 1e-6), dim=-1)
+        return action, log_prop
 
     @staticmethod
     def inv(x):
-        return torch.log(x.exp() - 1) - torch.log(x.exp() + 1)
+        x = x.clamp(min=-1 + 1e-6, max=1 - 1e-6)
+        return 0.5 * (x.log1p() - (-x).log1p())
     
     @staticmethod
     def log_prop_corr(x):
-        return torch.log(1 - torch.tanh(x) + 1e-6)
+        return torch.log(1 - torch.tanh(x)**2 + 1e-6)
     
 class Actor:
     def __init__(self,hidden_size: int, hidden_layers: int, actor_lr: float,
@@ -336,7 +336,6 @@ class Agent:
         state = torch.tensor(s, dtype=torch.float32).to(self.device)
         action, _ = self.policy.get_action_and_log_prob(state, deterministic=not train)
         action = action.squeeze(0).cpu().detach().numpy()
-        
         assert action.shape == (1,), 'Incorrect action shape.'
         assert isinstance(action, np.ndarray ), 'Action dtype must be np.ndarray' 
         return action
